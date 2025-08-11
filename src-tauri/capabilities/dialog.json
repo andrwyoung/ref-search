@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tauri.app/schemas/capabilities.json",
+  "identifier": "dialog",
+  "description": "Allow file/folder dialogs and confirms",
+  "windows": ["*"],
+  "permissions": [
+    "dialog:allow-open",
+    "dialog:allow-confirm",
+    "dialog:allow-ask",
+    "dialog:allow-message"
+  ]
+}

@@ -40,7 +40,7 @@ class SearchTextBody(BaseModel):
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:54999", "http://127.0.0.1:54999", "tauri://localhost"],
+    allow_origins=["http://localhost:54998", "http://127.0.0.1:54998", "tauri://localhost"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

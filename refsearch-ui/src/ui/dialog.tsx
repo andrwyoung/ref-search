@@ -40,9 +40,7 @@ export function Confirm({
             width: 360,
           }}
         >
-          <Dialog.Title style={{ fontWeight: 600, marginBottom: 8 }}>
-            {title}
-          </Dialog.Title>
+          <Dialog.Title style={{ fontWeight: 600 }}>{title}</Dialog.Title>
           <div style={{ fontSize: 14, marginBottom: 12 }}>{message}</div>
           {requireText && (
             <div style={{ marginBottom: 12 }}>

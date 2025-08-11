@@ -4,7 +4,7 @@ import type { RootBucket } from "../api";
 export default function FolderCount({
   foldersData,
   onRemoveRoot,
-  onNukeAll,
+  onResetIndex,
   running,
 }: {
   foldersData: {
@@ -12,7 +12,7 @@ export default function FolderCount({
     roots: RootBucket[];
   } | null;
   onRemoveRoot?: (root: string) => void;
-  onNukeAll?: () => void;
+  onResetIndex?: () => void;
   running?: boolean;
 }) {
   const [openRoots, setOpenRoots] = useState<Record<string, boolean>>({});
@@ -35,19 +35,18 @@ export default function FolderCount({
           Indexed folders ({foldersData.total_images} images total)
         </div>
         <button
-          onClick={onNukeAll}
+          onClick={onResetIndex}
           disabled={running}
+          title="Removes the local index and thumbnails. Your images are untouched."
           style={{
             padding: "8px 12px",
             borderRadius: 6,
-            border: "1px solid #e00",
-            color: "#e00",
+            border: "1px solid #bdbdbd",
+            color: "#333",
             background: "white",
-            marginLeft: 8,
           }}
-          title="Delete all index data"
         >
-          Nuke all
+          Reset index
         </button>
       </div>
       {foldersData.roots.map((r) => (

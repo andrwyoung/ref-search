@@ -5,7 +5,7 @@
   "identifier": "com.tauri.dev",
   "build": {
     "frontendDist": "./refsearch-ui/dist",
-    "devUrl": "http://localhost:54999",
+    "devUrl": "http://localhost:54998",
     "beforeDevCommand": "npm run dev --prefix ./refsearch-ui",
     "beforeBuildCommand": "npm run build --prefix ./refsearch-ui"
   },
