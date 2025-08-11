@@ -18,6 +18,8 @@ import {
 } from "./api";
 import { Progress } from "./ui/progress-bar";
 import FolderCount from "./ui/folder-count";
+import { Confirm } from "./ui/dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -28,6 +30,11 @@ export default function App() {
   const [status, setStatus] = useState<ReindexStatus | null>(null);
   const [appReady, setAppReady] = useState<Ready | null>(null);
   const prevIndexedRef = useRef<number>(0);
+
+  const [confirmNukeOpen, setConfirmNukeOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<{ root: string } | null>(
+    null
+  );
 
   const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
 
@@ -46,6 +53,23 @@ export default function App() {
       .then(setFoldersData)
       .catch(() => setFoldersData(null));
   }, []);
+
+  async function pickFolder() {
+    try {
+      const sel = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose a folder to index",
+      });
+      if (typeof sel === "string" && sel) {
+        setRootsInput(sel);
+        // optionally: start immediately
+        // setTimeout(() => onStartIndex(), 0);
+      }
+    } catch (e) {
+      console.error("openDialog failed:", e);
+    }
+  }
 
   async function onStartIndex() {
     const clean = rootsInput.trim();
@@ -103,64 +127,15 @@ export default function App() {
 
   async function onRemoveRoot(root: string) {
     if (!root || status?.state === "running") return;
-    const ok = window.confirm(`Remove this folder from the index?\n\n${root}`);
-    if (!ok) return;
-
-    // kick off remove job (server rebuilds with survivors)
-    try {
-      await removeRoots([root]);
-      // start polling exactly like reindex
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      // mark as running so UI disables buttons
-      setStatus({ state: "running", processed: 0, total: 0 } as any);
-
-      pollRef.current = window.setInterval(async () => {
-        const s = await reindexStatus().catch(() => null);
-        if (!s) return;
-        setStatus(s);
-        if (s.state === "done" || s.state === "error") {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-          }
-          const now = await ready().catch(() => null);
-          setAppReady(now);
-          getFolders()
-            .then(setFoldersData)
-            .catch(() => setFoldersData(null));
-        }
-      }, 1000);
-    } catch (e: any) {
-      alert(e?.message || "Failed to remove folder");
-    }
+    setConfirmRemove({ root });
   }
 
-  async function onNukeAll() {
+  function onNukeAll() {
     if (status?.state === "running") {
       alert("Indexing is in progress. Please wait or cancel before nuking.");
       return;
     }
-    const ok = window.confirm(
-      "This will delete the index, vectors, config, thumbnails, and clear the DB.\n\nType NUKE in the next prompt to confirm."
-    );
-    if (!ok) return;
-    const typed = window.prompt('Type "NUKE" to confirm:');
-    if (typed !== "NUKE") return;
-
-    try {
-      await nukeAll("NUKE");
-      setStatus({ state: "idle", processed: 0, total: 0 } as any);
-      const now = await ready().catch(() => null);
-      setAppReady(now);
-      getFolders()
-        .then(setFoldersData)
-        .catch(() => setFoldersData(null));
-    } catch (e: any) {
-      alert(e?.message || "Failed to wipe index");
-    }
+    setConfirmNukeOpen(true);
   }
 
   const cellW = 180,
@@ -213,6 +188,32 @@ export default function App() {
       >
         <div style={{ marginBottom: 8, fontWeight: 600 }}>
           Index your library
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={rootsInput}
+            onChange={(e) => setRootsInput(e.target.value)}
+            placeholder="Choose or paste a folder path"
+            style={{
+              flex: 1,
+              padding: "8px 10px",
+              borderRadius: 6,
+              border: "1px solid #ccc",
+            }}
+          />
+          <button
+            onClick={pickFolder}
+            style={{ padding: "8px 12px", borderRadius: 6 }}
+          >
+            Choose folder…
+          </button>
+          <button
+            onClick={onStartIndex}
+            disabled={status?.state === "running" || !rootsInput.trim()}
+            style={{ padding: "8px 12px", borderRadius: 6 }}
+          >
+            {status?.state === "running" ? "Indexing…" : "Start indexing"}
+          </button>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <input
@@ -314,6 +315,64 @@ export default function App() {
       >
         {Cell}
       </Grid>
+
+      <Confirm
+        open={confirmNukeOpen}
+        onOpenChange={setConfirmNukeOpen}
+        title="Nuke all"
+        message="This deletes the index, vectors, config, thumbnails, and clears the DB."
+        confirmLabel="Nuke"
+        requireText="NUKE"
+        onConfirm={async () => {
+          try {
+            await nukeAll("NUKE");
+            setStatus({ state: "idle", processed: 0, total: 0 } as any);
+            const now = await ready().catch(() => null);
+            setAppReady(now);
+            getFolders()
+              .then(setFoldersData)
+              .catch(() => setFoldersData(null));
+          } catch (e: any) {
+            alert(e?.message || "Failed to wipe index");
+          }
+        }}
+      />
+      <Confirm
+        open={!!confirmRemove}
+        onOpenChange={(v) => !v && setConfirmRemove(null)}
+        title="Remove folder"
+        message={confirmRemove?.root || ""}
+        confirmLabel="Remove"
+        onConfirm={async () => {
+          try {
+            await removeRoots([confirmRemove!.root]);
+            // start polling as you already do…
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            setStatus({ state: "running", processed: 0, total: 0 } as any);
+            pollRef.current = window.setInterval(async () => {
+              const s = await reindexStatus().catch(() => null);
+              if (!s) return;
+              setStatus(s);
+              if (s.state === "done" || s.state === "error") {
+                if (pollRef.current) {
+                  clearInterval(pollRef.current);
+                  pollRef.current = null;
+                }
+                const now = await ready().catch(() => null);
+                setAppReady(now);
+                getFolders()
+                  .then(setFoldersData)
+                  .catch(() => setFoldersData(null));
+              }
+            }, 1000);
+          } catch (e: any) {
+            alert(e?.message || "Failed to remove folder");
+          }
+        }}
+      />
     </div>
   );
 }

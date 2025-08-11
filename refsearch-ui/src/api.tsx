@@ -7,7 +7,9 @@ export type Item = {
   orientation: "landscape" | "portrait" | "square";
 };
 
-const BASE = "http://localhost:5179";
+// const BASE = "http://localhost:5179";
+const BASE =
+  (import.meta.env.VITE_API_BASE as string) ?? "http://127.0.0.1:5179";
 
 export type Ready = {
   ok: boolean;

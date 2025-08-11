@@ -302,8 +302,7 @@ def reindex_status():
     state = "running" if STATE["reindex"]["running"] else ("error" if STATE["reindex"]["error"] else "done" if STATE["reindex"]["total"]>0 else "idle")
     return {"state": state, **STATE["reindex"]}
 
-if __name__ == "__main__":
-    uvicorn.run("core.server:app", host="127.0.0.1", port=PORT, reload=True)
+
 
 # get all the current roots
 def _current_roots() -> list[str]:
@@ -431,3 +430,10 @@ def nuke_all(body: NukeAllBody):
     # STATE["mode"] = None
     # STATE["X"] = None
     return {"ok": True, "message": "All index data wiped.", "roots": [], "indexed": 0}
+
+
+
+if __name__ == "__main__":
+    host = "127.0.0.1"
+    port = PORT  # already from env; keep it
+    uvicorn.run("core.server:app", host=host, port=port)  # no reload in prod
