@@ -9,7 +9,7 @@ export type Item = {
 
 // const BASE = "http://localhost:5179";
 const BASE =
-  (import.meta.env.VITE_API_BASE as string) ?? "http://127.0.0.1:5179";
+  (import.meta.env.VITE_API_BASE as string) ?? "http://127.0.0.1:54999";
 
 export type Ready = {
   ok: boolean;
@@ -120,7 +120,7 @@ export async function removeRoots(
 export async function nukeAll(
   confirm?: string
 ): Promise<{ ok: boolean; message: string }> {
-  const r = await fetch("http://localhost:5179/nuke_all", {
+  const r = await fetch(`${BASE}/nuke_all`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(confirm ? { confirm } : {}),

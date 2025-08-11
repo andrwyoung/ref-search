@@ -17,7 +17,7 @@ DEFAULT_STORE = os.path.join(PROJECT_ROOT, "store")
 
 # Allow override via env var; expand ~ and make absolute
 STORE_DIR = os.path.abspath(os.path.expanduser(os.environ.get("REFSEARCH_STORE", DEFAULT_STORE)))
-PORT = int(os.environ.get("REFSEARCH_PORT", "5179"))
+PORT = int(os.environ.get("REFSEARCH_PORT", "54999"))
 THUMB_DIR = os.path.join(STORE_DIR, "thumbs")
 os.makedirs(THUMB_DIR, exist_ok=True)
 os.makedirs(STORE_DIR, exist_ok=True)
@@ -40,7 +40,7 @@ class SearchTextBody(BaseModel):
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "tauri://localhost"],
+    allow_origins=["http://localhost:54999", "http://127.0.0.1:54999", "tauri://localhost"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

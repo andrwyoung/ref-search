@@ -12,7 +12,7 @@ refsearch/
 ```
 # running python server on one terminal
 conda activate refsearch311
-python -m uvicorn core.server:app --port 5179 --reload
+python -m uvicorn core.server:app --port 54999 --reload
 
 
 # in refsearch-ui/ on another terminal

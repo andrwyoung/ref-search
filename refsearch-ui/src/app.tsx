@@ -20,6 +20,7 @@ import { Progress } from "./ui/progress-bar";
 import FolderCount from "./ui/folder-count";
 import { Confirm } from "./ui/dialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -35,6 +36,27 @@ export default function App() {
   const [confirmRemove, setConfirmRemove] = useState<{ root: string } | null>(
     null
   );
+
+  const dirInputRef = useRef<HTMLInputElement | null>(null);
+
+  function triggerDirPicker() {
+    dirInputRef.current?.click();
+  }
+
+  async function onDirPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+
+    // In Tauri, files[i].path is available via the fs access; in plain browsers you
+    // only get a virtual webkitRelativePath (no absolute path).
+    // For your flow, we can take the common prefix as the selected folder:
+    const rels = files
+      .map((f) => (f as any).webkitRelativePath as string)
+      .filter(Boolean);
+    const root = rels.length ? rels[0].split("/")[0] : "";
+    setRootsInput(root); // in Tauri, consider resolving to absolute via backend if needed
+    e.target.value = "";
+  }
 
   const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
 
@@ -52,6 +74,20 @@ export default function App() {
     getFolders()
       .then(setFoldersData)
       .catch(() => setFoldersData(null));
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("backend-log", (e) => {
+      // you can show this in a log pane; for now just console
+      // eslint-disable-next-line no-console
+      console.log("[backend-log]", e.payload);
+    }).then((off) => (unlisten = off));
+    return () => {
+      try {
+        unlisten && unlisten();
+      } catch {}
+    };
   }, []);
 
   async function pickFolder() {
@@ -203,6 +239,22 @@ export default function App() {
           />
           <button
             onClick={pickFolder}
+            style={{ padding: "8px 12px", borderRadius: 6 }}
+          >
+            Choose Tauri folder…
+          </button>
+
+          <input
+            type="file"
+            ref={dirInputRef}
+            style={{ display: "none" }}
+            // @ts-ignore – this is non-standard but supported in Chromium/WebKit and Tauri
+            webkitdirectory="true"
+            onChange={onDirPicked}
+          />
+
+          <button
+            onClick={triggerDirPicker}
             style={{ padding: "8px 12px", borderRadius: 6 }}
           >
             Choose folder…
