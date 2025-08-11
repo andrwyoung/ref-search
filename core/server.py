@@ -23,6 +23,8 @@ os.makedirs(THUMB_DIR, exist_ok=True)
 os.makedirs(STORE_DIR, exist_ok=True)
 
 # ---- LOAD CORE (your existing code) ----
+from core.commands.nuke import _wipe_store
+from core.helpers.helpers import _detect_overlaps, _norm_path
 from core.models import load_model, embed_texts, embed_images  # you already have these
 import faiss
 
@@ -206,7 +208,7 @@ def folders():
              for r, n in by_root]
 
     return {"total_images": total, "roots": roots}
-    
+
 @app.post("/open_path")
 def open_path(body: dict):
     path = body.get("path")
@@ -228,7 +230,7 @@ def _reindex_worker(roots: list[str]):
         STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None})
         # ---- build index (instrumented) ----
         # reuse your build_index but add a callback
-        from core.indexer import build_index_with_progress
+        from core.commands.indexer import build_index_with_progress
 
         def on_progress(done, total):
             STATE["reindex"].update({"processed": done, "total": total})
@@ -245,12 +247,52 @@ def _reindex_worker(roots: list[str]):
     finally:
         STATE["reindex"]["running"] = False
 
+
+
 @app.post("/reindex")
 def reindex(body: dict):
     roots = body.get("roots") or []
-    if not roots: raise HTTPException(400, "Provide roots: string[]")
+    merge = body.get("merge", True)
+
+    # Normalize now for consistent behavior
+    roots = [ _norm_path(r) for r in roots if r ]
+
+    # Merge with previous roots from config.json
+    cfg_path = os.path.join(STORE_DIR, "config.json")
+    prev_roots = []
+    if os.path.exists(cfg_path):
+        try:
+            prev_roots = [ _norm_path(r) for r in json.load(open(cfg_path)).get("roots", []) ]
+        except Exception:
+            prev_roots = []
+
+    if merge:
+        roots = sorted(set(roots + prev_roots))
+
+    if not roots:
+        raise HTTPException(400, "Provide roots: string[]")
+
+    # 🔒 Overlap checks
+    inc_in_ex, ex_in_inc, inc_self = _detect_overlaps(prev_roots, roots if not merge else [r for r in roots if r not in prev_roots])
+
+    if inc_self:
+        # incoming contains nested duplicates within itself
+        details = "; ".join([f"{inner} is inside {outer}" for inner, outer in inc_self])
+        raise HTTPException(400, f"Request includes overlapping folders: {details}. Remove the broader or the inner one and try again.")
+
+    if inc_in_ex:
+        # trying to add a folder that is already covered by an existing root
+        details = "; ".join([f"{inner} is already inside existing {outer}" for inner, outer in inc_in_ex])
+        raise HTTPException(400, f"Folder already included by existing root(s): {details}.")
+
+    if ex_in_inc:
+        # trying to add a broader root that would swallow existing ones
+        details = "; ".join([f"existing {inner} would be swallowed by new {outer}" for inner, outer in ex_in_inc])
+        raise HTTPException(400, f"New root overlaps existing roots: {details}. Remove the existing narrower root(s) first, or add only the non-overlapping folder.")
+
     if STATE["reindex"]["running"]:
         return {"state": "running", **STATE["reindex"]}
+
     t = threading.Thread(target=_reindex_worker, args=(roots,), daemon=True)
     t.start()
     return {"state": "started", **STATE["reindex"]}
@@ -262,3 +304,130 @@ def reindex_status():
 
 if __name__ == "__main__":
     uvicorn.run("core.server:app", host="127.0.0.1", port=PORT, reload=True)
+
+# get all the current roots
+def _current_roots() -> list[str]:
+    cfg_path = os.path.join(STORE_DIR, "config.json")
+    if not os.path.exists(cfg_path):
+        return []
+    try:
+        return list(map(str, json.load(open(cfg_path)).get("roots", [])))
+    except Exception:
+        return []
+
+@app.get("/roots")
+def roots():
+    return {"roots": _current_roots()}
+
+
+class RemoveRootsBody(BaseModel):
+    roots: list[str]  # wipe_if_empty removed
+
+@app.post("/remove_roots")
+def remove_roots(body: RemoveRootsBody):
+    # don’t allow two jobs at once
+    if STATE["reindex"]["running"]:
+        return {"state": "running", **STATE["reindex"]}
+
+    current = set(_current_roots())
+    if not current:
+        raise HTTPException(409, "No existing roots to remove from.")
+
+    to_remove = set(map(str, body.roots or []))
+    if not to_remove:
+        raise HTTPException(400, "Provide roots: string[]")
+
+    survivors = sorted(current - to_remove)
+
+    # If nothing left: wipe EVERYTHING and reset in-memory state
+    if not survivors:
+        # delete index files and config
+        for name in ("index.faiss", "vectors.npy", "ids.npy", "config.json"):
+            p = os.path.join(STORE_DIR, name)
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+        # clear the DB so /folders is empty immediately
+        db_path = os.path.join(STORE_DIR, "meta.sqlite")
+        try:
+            if os.path.exists(db_path):
+                with sqlite3.connect(db_path, check_same_thread=False) as con:
+                    con.execute("DELETE FROM images")
+                    con.commit()
+        except Exception:
+            pass
+
+        # reset server state
+        try:
+            if STATE.get("con"):
+                STATE["con"].close()
+        except Exception:
+            pass
+        STATE.update({
+            "index": None,
+            "ids": None,
+            "con": None,
+            "dim": 0
+        })
+
+        # if you track numpy fallback state elsewhere, reset it too:
+        # STATE["mode"] = None
+        # STATE["X"] = None
+
+        return {"state": "done", "removed": list(to_remove), "roots": []}
+
+    # Rebuild the index with survivors ONLY (no merge!)
+    def worker():
+        try:
+            STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None})
+            from core.commands.indexer import build_index_with_progress
+            def on_progress(done, total):
+                STATE["reindex"].update({"processed": done, "total": total})
+            build_index_with_progress(survivors, STORE_DIR, STATE["model"], STATE["preprocess"], on_progress, device=STATE["device"])
+            # reload in-memory store
+            idx, ids, con = load_store()
+            STATE["index"], STATE["ids"] = idx, ids
+            if STATE["con"]:
+                try: STATE["con"].close()
+                except: pass
+            STATE["con"] = con
+            STATE["dim"] = idx.d
+        except Exception as e:
+            STATE["reindex"]["error"] = str(e)
+        finally:
+            STATE["reindex"]["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"state": "started", "removed": list(to_remove), "roots": survivors}
+
+class NukeAllBody(BaseModel):
+    confirm: Optional[str] = None  # optional extra guard
+
+@app.post("/nuke_all")
+def nuke_all(body: NukeAllBody):
+    if STATE["reindex"]["running"]:
+        raise HTTPException(423, "Indexing in progress. Stop indexing before nuking.")
+    # optional guard: require confirm === "NUKE"
+    if body.confirm is not None and body.confirm != "NUKE":
+        raise HTTPException(400, "Confirmation failed. Send {\"confirm\":\"NUKE\"} to proceed.")
+    _wipe_store()
+
+        # reset in-memory state
+    try:
+        if STATE.get("con"):
+            STATE["con"].close()
+    except Exception:
+        pass
+    STATE.update({
+        "index": None,
+        "ids": None,
+        "con": None,
+        "dim": 0
+    })
+    # if you track numpy fallback:
+    # STATE["mode"] = None
+    # STATE["X"] = None
+    return {"ok": True, "message": "All index data wiped.", "roots": [], "indexed": 0}

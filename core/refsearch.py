@@ -1,7 +1,7 @@
 import typer, os, platform, subprocess
 from models import load_model
-from indexer import build_index
-from searcher import search_text, search_image
+from core.commands.indexer import build_index
+from core.commands.searcher import search_text, search_image
 import time
 
 app = typer.Typer(add_completion=False)

@@ -96,6 +96,36 @@ export async function getFolders(): Promise<{
   total_images: number;
   roots: RootBucket[];
 }> {
-  const r = await fetch("http://localhost:5179/folders");
+  const r = await fetch(`${BASE}/folders`);
+  return r.json();
+}
+
+export async function removeRoots(
+  roots: string[]
+): Promise<{ state: string; removed: string[]; roots: string[] }> {
+  const r = await fetch(`${BASE}/remove_roots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roots }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `remove_roots failed (${r.status})`);
+  }
+  return r.json();
+}
+
+export async function nukeAll(
+  confirm?: string
+): Promise<{ ok: boolean; message: string }> {
+  const r = await fetch("http://localhost:5179/nuke_all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(confirm ? { confirm } : {}),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `nuke_all failed (${r.status})`);
+  }
   return r.json();
 }

@@ -13,6 +13,8 @@ import {
   reindexStatus,
   getFolders,
   type RootBucket,
+  removeRoots,
+  nukeAll,
 } from "./api";
 import { Progress } from "./ui/progress-bar";
 import FolderCount from "./ui/folder-count";
@@ -96,6 +98,68 @@ export default function App() {
     } finally {
       setLoading(false);
       e.currentTarget.value = "";
+    }
+  }
+
+  async function onRemoveRoot(root: string) {
+    if (!root || status?.state === "running") return;
+    const ok = window.confirm(`Remove this folder from the index?\n\n${root}`);
+    if (!ok) return;
+
+    // kick off remove job (server rebuilds with survivors)
+    try {
+      await removeRoots([root]);
+      // start polling exactly like reindex
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      // mark as running so UI disables buttons
+      setStatus({ state: "running", processed: 0, total: 0 } as any);
+
+      pollRef.current = window.setInterval(async () => {
+        const s = await reindexStatus().catch(() => null);
+        if (!s) return;
+        setStatus(s);
+        if (s.state === "done" || s.state === "error") {
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          const now = await ready().catch(() => null);
+          setAppReady(now);
+          getFolders()
+            .then(setFoldersData)
+            .catch(() => setFoldersData(null));
+        }
+      }, 1000);
+    } catch (e: any) {
+      alert(e?.message || "Failed to remove folder");
+    }
+  }
+
+  async function onNukeAll() {
+    if (status?.state === "running") {
+      alert("Indexing is in progress. Please wait or cancel before nuking.");
+      return;
+    }
+    const ok = window.confirm(
+      "This will delete the index, vectors, config, thumbnails, and clear the DB.\n\nType NUKE in the next prompt to confirm."
+    );
+    if (!ok) return;
+    const typed = window.prompt('Type "NUKE" to confirm:');
+    if (typed !== "NUKE") return;
+
+    try {
+      await nukeAll("NUKE");
+      setStatus({ state: "idle", processed: 0, total: 0 } as any);
+      const now = await ready().catch(() => null);
+      setAppReady(now);
+      getFolders()
+        .then(setFoldersData)
+        .catch(() => setFoldersData(null));
+    } catch (e: any) {
+      alert(e?.message || "Failed to wipe index");
     }
   }
 
@@ -187,7 +251,7 @@ export default function App() {
           }}
         >
           {status && <Progress s={status} />}
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
+          {/* <div style={{ fontSize: 12, opacity: 0.8 }}>
             {appReady?.has_index ? (
               <>
                 Total indexed: <b>{appReady.indexed}</b>
@@ -195,7 +259,7 @@ export default function App() {
             ) : (
               <>No index yet</>
             )}
-          </div>
+          </div> */}
         </div>
 
         {/* “These images have been indexed” message */}
@@ -206,7 +270,12 @@ export default function App() {
           </div>
         )}
 
-        <FolderCount foldersData={foldersData} />
+        <FolderCount
+          foldersData={foldersData}
+          onRemoveRoot={onRemoveRoot}
+          onNukeAll={onNukeAll}
+          running={status?.state === "running"}
+        />
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
