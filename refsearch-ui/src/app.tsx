@@ -11,8 +11,11 @@ import {
   ready,
   startReindex,
   reindexStatus,
+  getFolders,
+  type RootBucket,
 } from "./api";
 import { Progress } from "./ui/progress-bar";
+import FolderCount from "./ui/folder-count";
 
 export default function App() {
   const [q, setQ] = useState("");
@@ -24,33 +27,52 @@ export default function App() {
   const [appReady, setAppReady] = useState<Ready | null>(null);
   const prevIndexedRef = useRef<number>(0);
 
+  const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
+
+  // folders
+  const [foldersData, setFoldersData] = useState<{
+    total_images: number;
+    roots: RootBucket[];
+  } | null>(null);
+
   useEffect(() => {
+    // load at start and whenever indexing finishes
     ready()
       .then(setAppReady)
       .catch(() => setAppReady(null));
+    getFolders()
+      .then(setFoldersData)
+      .catch(() => setFoldersData(null));
   }, []);
 
   async function onStartIndex() {
     const clean = rootsInput.trim();
-    if (!clean) return;
+    if (!clean || status?.state === "running") return;
 
-    // capture current total so we can show “newly indexed” delta after
     const r = await ready().catch(() => null);
     prevIndexedRef.current = r?.indexed ?? 0;
 
-    // start the job
     const started = await startReindex([clean]);
     setStatus(started);
 
-    // poll until done or error
-    const id = setInterval(async () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    pollRef.current = window.setInterval(async () => {
       const s = await reindexStatus().catch(() => null);
       if (!s) return;
       setStatus(s);
       if (s.state === "done" || s.state === "error") {
-        clearInterval(id);
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
         const now = await ready().catch(() => null);
         setAppReady(now);
+        getFolders()
+          .then(setFoldersData)
+          .catch(() => setFoldersData(null)); // ← refresh list
       }
     }, 1000);
   }
@@ -142,10 +164,17 @@ export default function App() {
           />
           <button
             onClick={onStartIndex}
+            disabled={status?.state === "running"}
             style={{ padding: "8px 12px", borderRadius: 6 }}
           >
-            Start indexing
+            {status?.state === "running" ? "Indexing…" : "Start indexing"}
           </button>
+
+          {status?.state === "error" && (
+            <div style={{ color: "#b00020", fontSize: 12, marginTop: 6 }}>
+              {status.error || "Indexing failed."}
+            </div>
+          )}
         </div>
 
         {/* Status + totals */}
@@ -176,6 +205,8 @@ export default function App() {
             <b>{Math.max(0, appReady.indexed - prevIndexedRef.current)}</b>
           </div>
         )}
+
+        <FolderCount foldersData={foldersData} />
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>

@@ -23,6 +23,13 @@ export type ReindexStatus = {
   error?: string | null;
 };
 
+export type FolderBucket = { name: string; count: number };
+export type RootBucket = {
+  root: string;
+  count: number;
+  folders: FolderBucket[];
+};
+
 export async function ready(): Promise<Ready> {
   const r = await fetch(`${BASE}/ready`);
   return r.json();
@@ -83,4 +90,12 @@ export async function openPath(path: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
+}
+
+export async function getFolders(): Promise<{
+  total_images: number;
+  roots: RootBucket[];
+}> {
+  const r = await fetch("http://localhost:5179/folders");
+  return r.json();
 }

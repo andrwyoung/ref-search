@@ -183,23 +183,30 @@ def thumb(path: str):
 
 @app.get("/folders")
 def folders():
-    # protect
     if STATE["con"] is None:
-        return {"total_images": 0, "folders": []}
+        return {"total_images": 0, "roots": []}
 
     cur = STATE["con"].cursor()
-    rows = cur.execute("""
-        SELECT folder, COUNT(*) as n
-        FROM images
-        GROUP BY folder
-        ORDER BY n DESC
-    """).fetchall()
     total = cur.execute("SELECT COUNT(*) FROM images").fetchone()[0]
-    return {
-        "total_images": total,
-        "folders": [{"name": r[0] or "", "count": r[1]} for r in rows]
-    }
+    by_root = cur.execute("""
+        SELECT root, COUNT(*) as n
+        FROM images GROUP BY root ORDER BY n DESC
+    """).fetchall()
+    by_root_top = cur.execute("""
+        SELECT root, top_folder, COUNT(*) as n
+        FROM images GROUP BY root, top_folder
+        ORDER BY root ASC, n DESC
+    """).fetchall()
 
+    children = {}
+    for r, f, n in by_root_top:
+        children.setdefault(r or "", []).append({"name": f or "", "count": n})
+
+    roots = [{"root": r or "", "count": n, "folders": children.get(r or "", [])}
+             for r, n in by_root]
+
+    return {"total_images": total, "roots": roots}
+    
 @app.post("/open_path")
 def open_path(body: dict):
     path = body.get("path")
