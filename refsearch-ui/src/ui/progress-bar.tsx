@@ -1,29 +1,34 @@
 import type { ReindexStatus } from "../api";
 
-export function Progress({ s }: { s: ReindexStatus }) {
-  const pct = s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
+export function Progress({ status }: { status: ReindexStatus }) {
+  const percentDone =
+    status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+
+  const label =
+    status.state === "running"
+      ? `Indexing… ${status.processed}/${status.total} (${percentDone}%)`
+      : status.state === "done"
+      ? "Indexing complete!"
+      : status.state === "error"
+      ? `Error: ${status.error ?? "unknown"}`
+      : "Idle";
+
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 12, opacity: 0.8 }}>
-        {s.state === "running"
-          ? `Indexing… ${s.processed}/${s.total} (${pct}%)`
-          : s.state === "done"
-          ? "Indexing complete"
-          : s.state === "error"
-          ? `Error: ${s.error ?? "unknown"}`
-          : "Idle"}
-      </div>
+    <div className="my-4 flex flex-col items-center">
+      <div className="text-xs font-body text-gray-600">{label}</div>
+
       <div
-        style={{
-          width: 300,
-          height: 8,
-          background: "#eee",
-          borderRadius: 999,
-          overflow: "hidden",
-          marginTop: 4,
-        }}
+        className="min-w-lg w-lg h-4 bg-white rounded-lg overflow-hidden mt-1"
+        role="progressbar"
+        aria-valuenow={percentDone}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Indexing progress"
       >
-        <div style={{ width: `${pct}%`, height: "100%", background: "#888" }} />
+        <div
+          className="h-full bg-primary transition-all duration-200"
+          style={{ width: `${percentDone}%` }}
+        />
       </div>
     </div>
   );

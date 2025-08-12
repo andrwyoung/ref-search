@@ -231,80 +231,119 @@ export default function App() {
   const rows = Math.ceil(items.length / cols);
 
   return (
-    <div
-      style={{
-        maxWidth: 900,
-        margin: "40px auto",
-        padding: "0 12px",
-        fontFamily: "system-ui",
-      }}
-    >
-      <h1 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>
-        RefSearch
-      </h1>
-      <div
-        style={{
-          marginBottom: 16,
-          padding: 12,
-          border: "1px solid #ddd",
-          borderRadius: 8,
-        }}
-      >
-        <div style={{ marginBottom: 8, fontWeight: 600 }}>
-          Index your library
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            value={rootsInput}
-            onChange={(e) => setRootsInput(e.target.value)}
-            placeholder="Choose or paste a folder path"
-            style={{
-              flex: 1,
-              padding: "8px 10px",
-              borderRadius: 6,
-              border: "1px solid #ccc",
-            }}
-          />
-          <button
-            onClick={pickFolder}
-            style={{ padding: "8px 12px", borderRadius: 6 }}
-          >
-            Choose Tauri folder…
-          </button>
+    <div className="max-w-4xl mx-auto my-10 px-3">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="font-header text-lg font-medium">Refsearch</h1>
+        <span id="refresh-help" className="sr-only">
+          Reloads the interface only. Your image files and index are unaffected.
+        </span>
 
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          aria-label="Reload interface"
+          aria-describedby="refresh-help"
+          title="Reload interface (does not affect your index)"
+          className="font-body text-xs px-3 py-1 rounded-md cursor-pointer
+             hover:text-primary focus:outline-none focus-visible:ring-2
+             focus-visible:ring-primary focus-visible:ring-offset-2
+             focus-visible:ring-offset-white"
+        >
+          Reload View
+        </button>
+      </div>
+
+      <div className="bg-secondary-bg mb-2 p-4 rounded-md ">
+        <div className="flex justify-between">
+          <h1 className="font-header text-2xl">Indexed Folders:</h1>
           <button
-            onClick={onStartIndex}
-            disabled={status?.state === "running" || !rootsInput.trim()}
-            style={{ padding: "8px 12px", borderRadius: 6 }}
+            type="button"
+            onClick={onResetIndex}
+            disabled={status?.state === "running"}
+            title="Removes the local index and thumbnails. Your images are untouched."
+            className="border-2 border-error px-3 pb-0.5 pt-1
+            cursor-pointer hover:bg-rose-200 bg-rose-50 font-body text-sm 
+            rounded-md h-fit text-error transition-all duration-200"
           >
-            {status?.state === "running" ? "Indexing…" : "Start indexing"}
+            Reset Index
           </button>
-          {status?.state === "error" && (
-            <div style={{ color: "#b00020", fontSize: 12, marginTop: 6 }}>
-              {status.error || "Indexing failed."}
-            </div>
-          )}
         </div>
 
         {/* Status + totals */}
-        <div
-          style={{
-            marginTop: 8,
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
+
+        <div className="mb-12">
+          <FolderCount
+            foldersData={foldersData}
+            onRemoveRoot={onRemoveRoot}
+            running={status?.state === "running"}
+          />
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onStartIndex();
           }}
+          className="flex flex-col gap-2"
         >
-          {status && <Progress s={status} />}
-          {/* <div style={{ fontSize: 12, opacity: 0.8 }}>
-            {appReady?.has_index ? (
-              <>
-                Total indexed: <b>{appReady.indexed}</b>
-              </>
-            ) : (
-              <>No index yet</>
-            )}
+          <label htmlFor="rootPath" className="font-header text-lg block">
+            Add Images:
+          </label>
+
+          <div className="flex gap-2">
+            {/* Keep this as a non-submit button so it doesn't trigger form submit */}
+
+            <button
+              type="button"
+              onClick={pickFolder}
+              disabled={status?.state === "running"}
+              className="border-2 border-primary cursor-pointer hover:bg-primary-hover
+              font-body px-4 py-0.5 rounded-md"
+              aria-label="Choose a folder to index"
+            >
+              Choose Folder
+            </button>
+            <input
+              id="rootPath"
+              name="rootPath"
+              value={rootsInput}
+              onChange={(e) => setRootsInput(e.target.value)}
+              placeholder="Choose a folder path"
+              className="flex-1 px-3 py-1 rounded-lg font-body bg-white border-0
+                 focus:outline-none focus:ring-2 focus:ring-primary"
+              autoComplete="off"
+              aria-describedby="rootPathHint"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={status?.state === "running"}
+            className="bg-primary cursor-pointer hover:bg-primary-hover 
+            w-40 font-body px-4 py-1 rounded-md self-end"
+            aria-label="Choose a folder to index"
+          >
+            {status?.state === "running" ? "Indexing…" : "Import Images!"}
+          </button>
+
+          {/* Hidden submit so pressing Enter in the input always works cross-browser */}
+          <button type="submit" className="sr-only">
+            Start indexing
+          </button>
+
+          {/* <div id="rootPathHint" className="text-sm text-gray-500">
+            Your original files are untouched; this only updates the local
+            index.
           </div> */}
+        </form>
+        {status?.state === "error" && (
+          <div style={{ color: "#b00020", fontSize: 12, marginTop: 6 }}>
+            {status.error || "Indexing failed."}
+          </div>
+        )}
+
+        <div className="mt-4 w-full">
+          {status && <Progress status={status} />}
         </div>
 
         {/* “These images have been indexed” message */}
@@ -314,40 +353,28 @@ export default function App() {
             <b>{Math.max(0, appReady.indexed - prevIndexedRef.current)}</b>
           </div>
         )}
-
-        <FolderCount
-          foldersData={foldersData}
-          onRemoveRoot={onRemoveRoot}
-          onResetIndex={onResetIndex}
-          running={status?.state === "running"}
-        />
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
+      <div className="flex gap-2 items-center">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && doSearch()}
           placeholder="Type to search… (drop an image below)"
-          style={{
-            flex: 1,
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid #ccc",
-          }}
+          className="flex-1 m-2 p-2 rounded-md border-2 border-black"
         />
         <button
           onClick={doSearch}
           disabled={loading}
-          style={{ padding: "10px 16px", borderRadius: 8 }}
+          className="flex bg-emerald-200 rounded-lg py-1 px-4 cursor-pointer"
         >
           {loading ? "Searching…" : "Search"}
         </button>
       </div>
 
-      <div style={{ margin: "12px 0" }}>
+      {/* <div style={{ margin: "12px 0" }}>
         <input type="file" accept="image/*" onChange={onFile} />
-      </div>
+      </div> */}
 
       <Grid
         columnCount={cols}

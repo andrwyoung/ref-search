@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { RootBucket } from "../api";
+import { FaCaretDown, FaFolderOpen, FaImages, FaXmark } from "react-icons/fa6";
+import { open } from "@tauri-apps/plugin-shell";
 
 export default function FolderCount({
   foldersData,
   onRemoveRoot,
-  onResetIndex,
   running,
 }: {
   foldersData: {
@@ -12,7 +13,6 @@ export default function FolderCount({
     roots: RootBucket[];
   } | null;
   onRemoveRoot?: (root: string) => void;
-  onResetIndex?: () => void;
   running?: boolean;
 }) {
   const [openRoots, setOpenRoots] = useState<Record<string, boolean>>({});
@@ -23,7 +23,7 @@ export default function FolderCount({
   if (!foldersData) return null;
 
   return (
-    <div style={{ marginTop: 12 }}>
+    <div className="mt-3">
       <div
         style={{
           display: "flex",
@@ -31,94 +31,74 @@ export default function FolderCount({
           marginBottom: "1rem", // Tailwind's mb-4 is 1rem
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>
-          Indexed folders ({foldersData.total_images} images total)
-        </div>
-        <button
-          onClick={onResetIndex}
-          disabled={running}
-          title="Removes the local index and thumbnails. Your images are untouched."
-          style={{
-            padding: "8px 12px",
-            borderRadius: 6,
-            border: "1px solid #bdbdbd",
-            color: "#333",
-            background: "white",
-          }}
-        >
-          Reset index
-        </button>
+        <h1 className="font-body text-sm">
+          Total Images: {foldersData.total_images}
+        </h1>
       </div>
       {foldersData.roots.map((r) => (
-        <div
-          key={r.root}
-          style={{ border: "1px solid #eee", borderRadius: 6, marginBottom: 6 }}
-        >
+        <div key={r.root} className="border border-gray-200 rounded mb-1.5">
           <div
+            role="button"
+            tabIndex={0}
             onClick={() => toggleRoot(r.root)}
-            style={{
-              padding: "8px 10px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
+            className="px-2.5 py-2 flex items-center gap-2 w-full text-left cursor-pointer"
             title={r.root}
           >
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div
-                style={{
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  maxWidth: 680,
-                }}
-              >
-                {openRoots[r.root] ? "▾" : "▸"} {r.root}
+            <div className="flex-1 flex justify-between gap-3 text-sm font-body">
+              <div className="flex items-center gap-1 truncate max-w-2xl">
+                <FaCaretDown
+                  className={`${
+                    openRoots[r.root] ? "" : "-rotate-90"
+                  } transition-transform duration-200`}
+                />
+                {r.root}
               </div>
-              <div style={{ fontSize: 12, opacity: 0.8 }}>{r.count}</div>
+              <div className="flex items-center gap-4">
+                <div className="flex flex-row items-center gap-2 text-md font-header">
+                  <FaImages />
+                  {r.count}
+                </div>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    open(r.root);
+                  }}
+                  type="button"
+                  title="Open this folder"
+                  className="text-gray-500 hover:text-blue-500 cursor-pointer hover:scale-110 rounded-full text-lg"
+                >
+                  <FaFolderOpen />
+                </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveRoot?.(r.root);
+                  }}
+                  disabled={!onRemoveRoot || running}
+                  type="button"
+                  title="Forget this folder"
+                  className="text-border hover:text-error cursor-pointer hover:scale-115
+                   rounded-full text-lg"
+                >
+                  <FaXmark />
+                </button>
+              </div>
             </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemoveRoot?.(r.root);
-              }}
-              disabled={!onRemoveRoot || running}
-              title="Remove this folder from the index"
-              style={{
-                border: "1px solid #ddd",
-                background: "white",
-                borderRadius: 6,
-                padding: "2px 8px",
-                fontSize: 12,
-                opacity: running ? 0.6 : 1,
-                cursor: running ? "not-allowed" : "pointer",
-              }}
-            >
-              ✖
-            </button>
           </div>
+
           {openRoots[r.root] && (
-            <div style={{ padding: "4px 12px" }}>
+            <div className="px-3 py-1">
               {r.folders.map((f) => (
                 <div
                   key={f.name}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    padding: "2px 0",
-                    fontSize: 12,
-                  }}
+                  className="flex justify-between py-0.5 text-xs font-body px-4"
                 >
                   <div>{f.name}</div>
-                  <div>{f.count}</div>
+                  {!/\.(jpe?g|png|gif|bmp|webp|tiff)$/i.test(f.name) && (
+                    <div>{f.count}</div>
+                  )}
                 </div>
               ))}
             </div>
