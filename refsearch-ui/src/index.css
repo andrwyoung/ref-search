@@ -37,14 +37,14 @@
   --font-body: "Figtree", sans-serif;
 
   /* Brand / Accent */
-  --color-primary: #69debd; /* Tailwind blue-500 */
-  --color-primary-hover: #a2ead3; /* blue-600 */
-  --color-accent: #faba79; /* amber-500 */
+  --color-primary: #69debd; 
+  --color-primary-hover: #a2ead3; 
+  --color-accent: #faba79;
 
   /* Neutrals */
-  --color-secondary-bg: #f3f5f6; /* gray-50 */
-  --color-border: #9ea2a3; /* gray-200 */
-
+  --color-secondary-bg: #f3f5f6; 
+  --color-border: #9ea2a3; 
+  
   /* Text */
   --color-text: #111827; /* gray-900 */
   --color-text-light: #6b7280; /* gray-500 */

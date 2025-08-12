@@ -212,14 +212,41 @@ def folders():
 @app.post("/open_path")
 def open_path(body: dict):
     path = body.get("path")
-    if not path or not _is_indexed_path(path): raise HTTPException(404, "Unknown path")
-    os_name = platform.system()
+    if not path:
+        raise HTTPException(400, "Missing path")
+
+    path = _norm_path(path)
+    is_dir = os.path.isdir(path)
+
+    # Allow: any indexed FILE, or any DIRECTORY that is one of (or under) current roots
+    if is_dir:
+        roots = set(map(_norm_path, _current_roots()))
+        under_root = any(path == r or path.startswith(r + os.sep) for r in roots)
+        if not under_root:
+            raise HTTPException(403, "Folder is not under an indexed root")
+    else:
+        if not _is_indexed_path(path):
+            raise HTTPException(404, "Unknown file")
+
     try:
-        if os_name == "Darwin": subprocess.Popen(["open", "-R", path])
-        elif os_name == "Windows": subprocess.Popen(["explorer", "/select,", path])
-        else: subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        os_name = platform.system()
+        if os_name == "Darwin":
+            if is_dir:
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["open", "-R", path])  # reveal file
+        elif os_name == "Windows":
+            if is_dir:
+                subprocess.Popen(["explorer", path])
+            else:
+                subprocess.Popen(["explorer", "/select,", path])
+        else:
+            # Linux/BSD: open folder, or containing folder for files
+            target = path if is_dir else os.path.dirname(path)
+            subprocess.Popen(["xdg-open", target])
     except Exception as e:
         raise HTTPException(500, str(e))
+
     return {"ok": True}
 
 # Stub — wire your existing indexer later as a background task

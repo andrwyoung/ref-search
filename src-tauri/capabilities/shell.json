@@ -1,0 +1,25 @@
+{
+  "$schema": "https://tauri.app/schemas/capabilities.json",
+  "identifier": "shell",
+  "description": "Allow opening folders/files and URLs",
+  "windows": ["*"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-open",
+      "scope": [
+        "http://**",
+        "https://**",
+        "mailto:**",
+        "tel:**",
+
+        "$HOME/**",
+        "$DESKTOP/**",
+        "$DOCUMENT/**",
+        "$DOWNLOAD/**",
+        "$PICTURE/**",
+        "$VIDEO/**",
+        "$MUSIC/**"
+      ]
+    }
+  ]
+}

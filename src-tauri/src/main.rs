@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{Manager, RunEvent};
 use tauri::Emitter;   
 use tauri_plugin_dialog;
+use tauri_plugin_shell;
 
 struct ServerProc(Arc<Mutex<Option<Child>>>);
 
@@ -97,6 +98,7 @@ fn stop_backend(app: &tauri::AppHandle) {
 fn main() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_shell::init()) 
     .manage(ServerProc(Arc::new(Mutex::new(None))))
     .setup(|app| {
       start_backend(&app.handle());

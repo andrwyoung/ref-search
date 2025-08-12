@@ -1,7 +1,6 @@
 import { useState } from "react";
-import type { RootBucket } from "../api";
-import { FaCaretDown, FaFolderOpen, FaImages, FaXmark } from "react-icons/fa6";
-import { open } from "@tauri-apps/plugin-shell";
+import { FaCaretDown, FaImages, FaXmark } from "react-icons/fa6";
+import type { RootBucket } from "../../api";
 
 export default function FolderCount({
   foldersData,
@@ -12,7 +11,8 @@ export default function FolderCount({
     total_images: number;
     roots: RootBucket[];
   } | null;
-  onRemoveRoot?: (root: string) => void;
+  onRemoveRoot: (root: string) => void;
+  onOpenFile: (pathname: string) => void;
   running?: boolean;
 }) {
   const [openRoots, setOpenRoots] = useState<Record<string, boolean>>({});
@@ -59,17 +59,18 @@ export default function FolderCount({
                   {r.count}
                 </div>
 
-                <button
+                {/* <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    open(r.root);
+                    console.log("opening root: ", r.root);
+                    onOpenFile(r.root);
                   }}
                   type="button"
                   title="Open this folder"
                   className="text-gray-500 hover:text-blue-500 cursor-pointer hover:scale-110 rounded-full text-lg"
                 >
                   <FaFolderOpen />
-                </button>
+                </button> */}
 
                 <button
                   onClick={(e) => {
