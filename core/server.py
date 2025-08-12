@@ -95,16 +95,15 @@ def get_meta(path):
     if not row: return (None, None, None, None)
     return row  # width,height,orientation,folder
 
-def ensure_thumb(path, size=256):
-    # cache thumbs by hashing path
+def ensure_thumb(path, size=512):
     import hashlib
-    key = hashlib.md5(path.encode("utf-8")).hexdigest() + ".jpg"
+    key = hashlib.md5(f"{path}|{size}".encode("utf-8")).hexdigest() + ".jpg"
     out = os.path.join(THUMB_DIR, key)
     if not os.path.exists(out):
         try:
             im = Image.open(path).convert("RGB")
-            im.thumbnail((size, size))
-            im.save(out, "JPEG", quality=85)
+            im.thumbnail((size, size), Image.LANCZOS)  # better quality filter
+            im.save(out, "JPEG", quality=95, optimize=True, progressive=True)
         except Exception:
             return None
     return out

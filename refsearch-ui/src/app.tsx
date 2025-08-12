@@ -41,8 +41,8 @@ export default function App() {
   return (
     <div className="my-10 px-3">
       <div className="flex flex-col gap-2">
-        <div className="flex justify-between items-center mb-6 max-w-4xl mx-auto">
-          <h1 className="font-header text-lg font-medium">Refsearch</h1>
+        <div className="flex justify-between items-center mb-6 w-full max-w-4xl mx-auto">
+          <h1 className="font-header text-lg font-medium px-3">Refsearch</h1>
           <span id="refresh-help" className="sr-only">
             Reloads the interface only. Your image files and index are
             unaffected.
@@ -51,24 +51,24 @@ export default function App() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            aria-label="Reload interface"
+            aria-label="Reload Window"
             aria-describedby="refresh-help"
-            title="Reload interface (does not affect your index)"
+            title="Reload Window (Does not affect Index)"
             className="font-body text-xs px-3 py-1 rounded-md cursor-pointer
              hover:text-primary focus:outline-none focus-visible:ring-2
              focus-visible:ring-primary focus-visible:ring-offset-2
              focus-visible:ring-offset-white"
           >
-            Reload View
+            Reload Window
           </button>
         </div>
 
-        <div className="max-w-4xl mx-auto mb-4 flex gap-2">
+        <div className="w-full max-w-4xl mx-auto flex gap-2 font-body">
           <button
             type="button"
             onClick={() => setAppMode("search")}
-            className={`px-3 py-1 rounded-md border ${
-              appMode === "search" ? "bg-black text-white" : "bg-white"
+            className={`px-3 py-1 rounded-md  ${
+              appMode === "search" ? "text-primary" : "bg-white cursor-pointer"
             }`}
           >
             Search
@@ -76,8 +76,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setAppMode("index")}
-            className={`px-3 py-1 rounded-md border ${
-              appMode === "index" ? "bg-black text-white" : "bg-white"
+            className={`px-3 py-1 rounded-t-md ${
+              appMode === "index"
+                ? "bg-secondary-bg text-text"
+                : "bg-white cursor-pointer"
             }`}
           >
             Index

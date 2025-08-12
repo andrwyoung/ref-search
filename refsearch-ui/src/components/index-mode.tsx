@@ -15,6 +15,7 @@ import { Progress } from "./ui/progress-bar";
 import { confirm, ask } from "@tauri-apps/plugin-dialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FoldersDataType } from "../app";
+import { findCoveringRoot } from "../lib/is-already-indexed";
 
 type IndexModeProps = {
   appReady: Ready | null;
@@ -33,11 +34,33 @@ export default function IndexMode({
   const prevIndexedRef = useRef<number>(0);
   const [rootsInput, setRootsInput] = useState(""); // text field for a folder path
 
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
 
   async function onStartIndex() {
     const clean = rootsInput.trim();
-    if (!clean || status?.state === "running") return;
+    if (!clean || clean === "") {
+      setErrorMessage("No folder path chosen");
+      return;
+    }
+
+    if (status?.state === "running") return;
+
+    const hit = findCoveringRoot(clean, foldersData);
+    if (hit) {
+      if (hit.relation === "same") {
+        setErrorMessage(`This folder is already indexed`);
+      } else if (hit.relation === "child") {
+        setErrorMessage(`This folder is already indexed by: ${hit.root}`);
+      } else {
+        setErrorMessage(
+          `This folder is already partially indexed. Currently you have to remove the child and re-add the parent folder.`
+        );
+      }
+
+      return;
+    }
 
     const r = await ready().catch(() => null);
     prevIndexedRef.current = r?.indexed ?? 0;
@@ -68,6 +91,8 @@ export default function IndexMode({
   }
 
   async function pickFolder() {
+    setErrorMessage(null);
+
     try {
       const sel = await openDialog({
         directory: true,
@@ -127,16 +152,16 @@ export default function IndexMode({
       return;
     }
     const ok1 = await ask(
-      "This clears the local index and thumbnails so you can re-index from scratch.\n\nYour original images are NOT deleted.\n\nContinue?",
+      "Clear the local index and thumbnails so you can re-index from scratch.\n\n(Original images are NOT deleted.)\n\nContinue?",
       { title: "Reset index", kind: "warning" }
     );
     if (!ok1) return;
 
-    const ok2 = await confirm(
-      "Only cached index data will be removed. Your image files stay on disk.\nProceed?",
-      { title: "Confirm reset", kind: "warning" }
-    );
-    if (!ok2) return;
+    // const ok2 = await confirm(
+    //   "Only cached index data will be removed. Your image files stay on disk.\nProceed?",
+    //   { title: "Confirm reset", kind: "warning" }
+    // );
+    // if (!ok2) return;
 
     try {
       await nukeAll("NUKE"); // backend endpoint can stay the same
@@ -185,6 +210,7 @@ export default function IndexMode({
           onStartIndex();
         }}
         className="flex flex-col gap-2"
+        aria-busy={status?.state === "running" ? "true" : "false"}
       >
         <label htmlFor="rootPath" className="font-header text-lg block">
           Add Images:
@@ -207,7 +233,10 @@ export default function IndexMode({
             id="rootPath"
             name="rootPath"
             value={rootsInput}
-            onChange={(e) => setRootsInput(e.target.value)}
+            onChange={(e) => {
+              setErrorMessage(null);
+              setRootsInput(e.target.value);
+            }}
             placeholder="Choose a folder path"
             className="flex-1 px-3 py-1 rounded-lg font-body bg-white border-0
                  focus:outline-none focus:ring-2 focus:ring-primary"
@@ -216,29 +245,37 @@ export default function IndexMode({
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={status?.state === "running"}
-          className="bg-primary cursor-pointer hover:bg-primary-hover 
-            w-40 font-body px-4 py-1 rounded-md self-end"
-          aria-label="Choose a folder to index"
-        >
-          {status?.state === "running" ? "Indexing…" : "Import Images!"}
-        </button>
+        <div className="flex flex-row-reverse gap-4 items-center">
+          <button
+            type="submit"
+            disabled={status?.state === "running"}
+            aria-disabled={status?.state === "running" ? "true" : "false"}
+            className="bg-primary cursor-pointer hover:bg-primary-hover 
+            w-40 font-body px-4 py-1 rounded-md "
+            title="Index Images in Selected Folder"
+          >
+            {status?.state === "running" ? "Indexing…" : "Index Images!"}
+          </button>
+
+          <div className="font-body text-rose-500 text-sm">{errorMessage}</div>
+        </div>
 
         {/* Hidden submit so pressing Enter in the input always works cross-browser */}
         <button type="submit" className="sr-only">
           Start indexing
         </button>
 
-        {/* <div id="rootPathHint" className="text-sm text-gray-500">
-            Your original files are untouched; this only updates the local
-            index.
-          </div> */}
+        <span className="sr-only" aria-live="polite">
+          {status?.state === "running"
+            ? "Indexing has started."
+            : status?.state === "done"
+            ? "Indexing complete."
+            : ""}
+        </span>
       </form>
       {status?.state === "error" && (
-        <div style={{ color: "#b00020", fontSize: 12, marginTop: 6 }}>
-          {status.error || "Indexing failed."}
+        <div className="font-body text-rose-500 text-sm text-end mt-2 w-full">
+          Server Error: {status.error || "Indexing failed."}
         </div>
       )}
 
