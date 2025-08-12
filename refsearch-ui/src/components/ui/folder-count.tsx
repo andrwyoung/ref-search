@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { FaCaretDown, FaImages, FaXmark } from "react-icons/fa6";
+import { FaCaretDown, FaFolderOpen, FaImages, FaXmark } from "react-icons/fa6";
 import type { RootBucket } from "../../api";
 
 export default function FolderCount({
   foldersData,
   onRemoveRoot,
+  onOpenFile,
   running,
 }: {
   foldersData: {
@@ -53,13 +54,13 @@ export default function FolderCount({
                 />
                 {r.root}
               </div>
-              <div className="flex items-center gap-4">
-                <div className="flex flex-row items-center gap-2 text-md font-header">
+              <div className="flex items-center gap-2">
+                <div className="flex flex-row items-center gap-2 text-md font-header mr-2">
                   <FaImages />
                   {r.count}
                 </div>
 
-                {/* <button
+                <button
                   onClick={(e) => {
                     e.stopPropagation();
                     console.log("opening root: ", r.root);
@@ -67,10 +68,12 @@ export default function FolderCount({
                   }}
                   type="button"
                   title="Open this folder"
-                  className="text-gray-500 hover:text-blue-500 cursor-pointer hover:scale-110 rounded-full text-lg"
+                  className="text-gray-400 hover:text-blue-500 cursor-pointer 
+                  transition-all duration-200 text-md
+                  hover:scale-110 rounded-full "
                 >
                   <FaFolderOpen />
-                </button> */}
+                </button>
 
                 <button
                   onClick={(e) => {

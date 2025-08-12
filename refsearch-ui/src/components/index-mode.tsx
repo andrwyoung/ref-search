@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import {
+  cancelReindex,
   getFolders,
   nukeAll,
   openPath,
@@ -88,6 +89,14 @@ export default function IndexMode({
           .catch(() => setFoldersData(null)); // ← refresh list
       }
     }, 1000);
+  }
+
+  async function onCancelIndex() {
+    try {
+      await cancelReindex();
+    } catch (e) {
+      console.error("Cancel failed", e);
+    }
   }
 
   async function pickFolder() {
@@ -247,14 +256,27 @@ export default function IndexMode({
 
         <div className="flex flex-row-reverse gap-4 items-center">
           <button
-            type="submit"
-            disabled={status?.state === "running"}
-            aria-disabled={status?.state === "running" ? "true" : "false"}
-            className="bg-primary cursor-pointer hover:bg-primary-hover 
-            w-40 font-body px-4 py-1 rounded-md "
-            title="Index Images in Selected Folder"
+            type="button"
+            onClick={() => {
+              if (status?.state === "running") {
+                onCancelIndex();
+              } else {
+                onStartIndex();
+              }
+            }}
+            aria-disabled={false}
+            className={`w-40 font-body px-4 py-1 rounded-md cursor-pointer ${
+              status?.state === "running"
+                ? "bg-rose-500 hover:bg-rose-600 text-white"
+                : "bg-primary hover:bg-primary-hover"
+            }`}
+            title={
+              status?.state === "running"
+                ? "Cancel current indexing"
+                : "Index Images in Selected Folder"
+            }
           >
-            {status?.state === "running" ? "Indexing…" : "Index Images!"}
+            {status?.state === "running" ? "Cancel" : "Index Images!"}
           </button>
 
           <div className="font-body text-rose-500 text-sm">{errorMessage}</div>

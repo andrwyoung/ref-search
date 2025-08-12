@@ -57,6 +57,8 @@ STATE = {
     "con": None,
     "dim": 0
 }
+STATE["cancel_event"] = threading.Event()
+STATE["swap_lock"]   = threading.RLock()
 
 def pick_device():
     import torch
@@ -90,10 +92,13 @@ def load_store():
     return index, ids, con
 
 def get_meta(path):
-    cur = STATE["con"].cursor()
+    con = STATE.get("con")
+    if con is None:
+        return (None, None, None, None)
+    cur = con.cursor()
     row = cur.execute("SELECT width,height,orientation,folder FROM images WHERE path=?", (path,)).fetchone()
     if not row: return (None, None, None, None)
-    return row  # width,height,orientation,folder
+    return row # width,height,orientation,folder
 
 def ensure_thumb(path, size=512):
     import hashlib
@@ -142,7 +147,7 @@ def _post_filter(items, filters: Optional[SearchFilters]):
 
 # make sure an index actually exists before running
 def _require_index():
-    if STATE["index"] is None:
+    if not (STATE["index"] is not None and STATE["ids"] is not None and STATE["con"] is not None):
         raise HTTPException(status_code=409, detail="Index not built yet. Please run /reindex.")
 
 # this is what happens when we give our server some text to run
@@ -249,31 +254,47 @@ def open_path(body: dict):
     return {"ok": True}
 
 # Stub — wire your existing indexer later as a background task
-STATE["reindex"] = {"running": False, "processed": 0, "total": 0, "error": None}
+STATE["reindex"] = {"running": False, "processed": 0, "total": 0, "error": None, "cancelled": False}
 
 def _reindex_worker(roots: list[str]):
     try:
-        STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None})
-        # ---- build index (instrumented) ----
-        # reuse your build_index but add a callback
-        from core.commands.indexer import build_index_with_progress
+        # reset state
+        STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None, "cancelled": False})
+        STATE["cancel_event"].clear()  # <-- make sure a previous cancel doesn't auto-cancel this run
+
+        from core.commands.indexer import build_index_with_progress, CancelledError
 
         def on_progress(done, total):
             STATE["reindex"].update({"processed": done, "total": total})
 
-        build_index_with_progress(roots, STORE_DIR, STATE["model"], STATE["preprocess"], on_progress, device=STATE["device"])
-        # after success, hot-reload store
-        idx, ids, con = load_store()
-        STATE["index"], STATE["ids"] = idx, ids
-        if STATE["con"]: STATE["con"].close()
-        STATE["con"] = con
-        STATE["dim"] = idx.d
+        # run indexer with cancel support
+        build_index_with_progress(
+            roots, STORE_DIR, STATE["model"], STATE["preprocess"],
+            progress_cb=on_progress,
+            device=STATE["device"],
+            stop_event=STATE["cancel_event"]   # <-- pass it in
+        )
+
+        # after success, hot-reload store (swap under lock; close old con after)
+        idx_new, ids_new, con_new = load_store()
+        with STATE["swap_lock"]:
+            idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
+            STATE["index"], STATE["ids"], STATE["con"] = idx_new, ids_new, con_new
+            STATE["dim"] = idx_new.d
+        try:
+            if con_old:
+                con_old.close()
+        except Exception:
+            pass
+
+    except CancelledError:
+        # optional: mark for UI if you want to surface "cancelled" later
+        STATE["reindex"]["error"] = None  # ensure not marked as error
+        STATE["reindex"]["cancelled"] = True
     except Exception as e:
         STATE["reindex"]["error"] = str(e)
     finally:
         STATE["reindex"]["running"] = False
-
-
 
 @app.post("/reindex")
 def reindex(body: dict):
@@ -325,10 +346,23 @@ def reindex(body: dict):
 
 @app.get("/reindex_status")
 def reindex_status():
-    state = "running" if STATE["reindex"]["running"] else ("error" if STATE["reindex"]["error"] else "done" if STATE["reindex"]["total"]>0 else "idle")
-    return {"state": state, **STATE["reindex"]}
+    r = STATE["reindex"]
+    if r.get("running"):
+        state = "running"
+    elif r.get("error"):
+        state = "error"
+    elif r.get("cancelled"):
+        state = "cancelled"
+    elif r.get("total", 0) > 0:
+        state = "done"
+    else:
+        state = "idle"
+    return {"state": state, **r}
 
-
+@app.post("/cancel_index")
+def cancel_index():
+    STATE["cancel_event"].set()
+    return {"status": "cancel requested"}
 
 # get all the current roots
 def _current_roots() -> list[str]:
@@ -414,12 +448,15 @@ def remove_roots(body: RemoveRootsBody):
             build_index_with_progress(survivors, STORE_DIR, STATE["model"], STATE["preprocess"], on_progress, device=STATE["device"])
             # reload in-memory store
             idx, ids, con = load_store()
-            STATE["index"], STATE["ids"] = idx, ids
-            if STATE["con"]:
-                try: STATE["con"].close()
-                except: pass
-            STATE["con"] = con
-            STATE["dim"] = idx.d
+            with STATE["swap_lock"]:
+               idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
+               STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
+               STATE["dim"] = idx.d
+            try:
+                if con_old:
+                    con_old.close()
+            except Exception:
+                pass
         except Exception as e:
             STATE["reindex"]["error"] = str(e)
         finally:

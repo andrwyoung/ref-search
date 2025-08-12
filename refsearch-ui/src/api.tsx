@@ -51,6 +51,12 @@ export async function reindexStatus(): Promise<ReindexStatus> {
   return r.json();
 }
 
+export async function cancelReindex() {
+  const r = await fetch(`${BASE}/cancel_index`, { method: "POST" });
+  if (!r.ok) throw new Error("Cancel failed");
+  return r.json();
+}
+
 export async function searchText(
   q: string,
   opts?: { topk?: number; folder?: string; orientation?: string }

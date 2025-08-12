@@ -3,6 +3,9 @@ from PIL import Image
 import faiss
 import json, time
 
+class CancelledError(Exception):
+    pass
+
 def _atomic_write(path, write_fn):
     tmp = f"{path}.tmp"
     write_fn(tmp)
@@ -26,6 +29,8 @@ def _collect_paths(roots):
 def _is_file_up_to_date(con, path, mtime):
     row = con.execute("SELECT mtime FROM images WHERE path=?", (path,)).fetchone()
     return row is not None and abs(row[0] - mtime) < 1e-6
+
+
 
 def ensure_db(db_path: str) -> sqlite3.Connection:
     con = sqlite3.connect(db_path, check_same_thread=False)
@@ -71,10 +76,14 @@ def upsert_meta(con: sqlite3.Connection, path: str, width: int, height: int, mti
         VALUES(?,?,?,?,?,?,?,?,?)
     """, (path, root, rel, top, top, mtime, width, height, ori))
 
-def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=None, batch_size=64, device="cpu"):
+def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=None, batch_size=64, device="cpu", stop_event=None,):
     os.makedirs(store_dir, exist_ok=True)
     db = os.path.join(store_dir, "meta.sqlite")
     con = ensure_db(db)
+
+    def _check_cancel():
+        if stop_event is not None and stop_event.is_set():
+            raise CancelledError()
 
     from core.models import embed_images
     ids, vecs = [], []
@@ -94,6 +103,8 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
     total = len(paths)
     current_set = set(p for _, p in paths)
 
+    _check_cancel()
+
     # --- Remove DB rows for files no longer present ---
     cur = con.cursor()
     to_del = []
@@ -108,6 +119,8 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
     done = 0
 
     for root, p in paths:
+        _check_cancel()
+
         try:
             mtime = os.path.getmtime(p)
 
@@ -120,15 +133,11 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
                         ids.append(p)
                         # 1xD to match batch shapes for vstack
                         vecs.append(np.array(old_vecs[i], dtype="float32", copy=True)[None, :])
-                # still keep meta fresh (optional; skips I/O if you prefer)
-                # (We can skip upsert here since unchanged, but harmless either way.)
-                done += 1
-                if progress_cb and (done % 50 == 0 or done == total):
-                    progress_cb(done, total)
                 continue
 
             # Changed or new: read, upsert meta, queue for embedding
             with Image.open(p) as im_raw:
+                _check_cancel()
                 im = im_raw.convert("RGB")
                 width, height = im.size
             upsert_meta(con, p, width, height, mtime, root)
@@ -137,6 +146,7 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
             batch_imgs.append(t); batch_ids.append(p)
 
             if len(batch_imgs) >= batch_size:
+                _check_cancel()
                 feats = embed_images(model, batch_imgs, device=device)  # [B,D], normalized
                 vecs.append(feats); ids.extend(batch_ids)
                 batch_imgs, batch_ids = [], []
@@ -150,9 +160,11 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
                 progress_cb(done, total)
 
     if batch_imgs:
+        _check_cancel()
         feats = embed_images(model, batch_imgs, device=device)
         vecs.append(feats); ids.extend(batch_ids)
-
+    
+    _check_cancel()
     con.commit(); con.close()
 
     if not vecs:
