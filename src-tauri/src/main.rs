@@ -2,7 +2,7 @@
 
 use std::process::{Command, Stdio, Child};
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 use tauri::Emitter;   
 use tauri_plugin_dialog;
 use tauri_plugin_shell;
@@ -104,11 +104,22 @@ fn main() {
       start_backend(&app.handle());
       Ok(())
     })
+    .on_window_event(|app, event| {
+      if let WindowEvent::CloseRequested { .. } = event {
+        // Closing the last window: kill the sidecar
+        stop_backend(&app.app_handle());
+      }
+    })
     .build(tauri::generate_context!())
     .expect("error while running tauri app")
     .run(|app_handle, event| {
-      if let RunEvent::ExitRequested { .. } = event {
-        stop_backend(app_handle);
+      match event {
+        RunEvent::ExitRequested { .. } |
+        RunEvent::Exit |
+        RunEvent::WindowEvent { event: WindowEvent::Destroyed, .. } => {
+          stop_backend(app_handle);
+        }
+        _ => {}
       }
     });
 }
