@@ -5,7 +5,6 @@ import {
   nukeAll,
   openPath,
   ready,
-  reindexStatus,
   removeRoots,
   startReindex,
   type Ready,
@@ -17,6 +16,8 @@ import { confirm, ask } from "@tauri-apps/plugin-dialog";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FoldersDataType } from "../app";
 import { findCoveringRoot } from "../lib/is-already-indexed";
+import { currentRoots } from "../lib/get-current-roots";
+import { useJobPolling } from "../lib/use-job-polling";
 
 export default function IndexMode({
   appReady,
@@ -37,9 +38,15 @@ export default function IndexMode({
 
   const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
 
+  const { startPolling } = useJobPolling({
+    setStatus,
+    setAppReady,
+    setFoldersData,
+  });
+
   const running = status?.state === "running";
   const phase = status?.phase ?? "idle";
-  const canCancel = running && phase !== "finalizing";
+  const canCancel = running && !!status?.job_id && phase !== "finalizing";
 
   // clean up poll ref
   useEffect(() => {
@@ -53,25 +60,18 @@ export default function IndexMode({
 
   async function onStartIndex() {
     const clean = rootsInput.trim();
-    if (!clean || clean === "") {
-      setErrorMessage("No folder path chosen");
-      return;
-    }
-
-    if (status?.state === "running") return;
+    if (!clean) return setErrorMessage("No folder path chosen");
+    if (running) return;
 
     const hit = findCoveringRoot(clean, foldersData);
     if (hit) {
-      if (hit.relation === "same") {
-        setErrorMessage(`This folder is already indexed`);
-      } else if (hit.relation === "child") {
-        setErrorMessage(`This folder is already indexed by: ${hit.root}`);
-      } else {
-        setErrorMessage(
-          `This folder is already partially indexed. Currently you have to remove the child and re-add the parent folder.`
-        );
-      }
-
+      setErrorMessage(
+        hit.relation === "same"
+          ? "This folder is already indexed"
+          : hit.relation === "child"
+          ? `This folder is already indexed by: ${hit.root}`
+          : "This folder is partially indexed. Remove the child and re-add the parent."
+      );
       return;
     }
 
@@ -83,31 +83,9 @@ export default function IndexMode({
       return null;
     });
     if (!started) return;
+
     setStatus(started);
-
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    pollRef.current = window.setInterval(async () => {
-      const s = await reindexStatus().catch(() => null);
-      if (!s) return;
-      setStatus(s);
-
-      const isTerminal =
-        s.state === "done" || s.state === "error" || s.state === "cancelled";
-      if (isTerminal) {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-        const now = await ready().catch(() => null);
-        setAppReady(now);
-        getFolders()
-          .then(setFoldersData)
-          .catch(() => setFoldersData(null)); // ← refresh list
-      }
-    }, 1000);
+    startPolling();
   }
 
   async function onCancelIndex() {
@@ -143,7 +121,7 @@ export default function IndexMode({
   }
 
   async function onRemoveRoot(root: string) {
-    if (!root || status?.state === "running") return;
+    if (!root || running) return;
 
     const ok = await confirm(
       `Remove this folder from the index so it won't appear in search?\n\n${root}\n\nYour files are NOT deleted.`,
@@ -153,36 +131,34 @@ export default function IndexMode({
 
     try {
       await removeRoots([root]);
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      // mark running (no job_id → non-cancellable) and poll
       setStatus({ state: "running", processed: 0, total: 0 } as any);
-      pollRef.current = window.setInterval(async () => {
-        const s = await reindexStatus().catch(() => null);
-        if (!s) return;
-        setStatus(s);
-        const isTerminal =
-          s.state === "done" || s.state === "error" || s.state === "cancelled";
-        if (isTerminal) {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-          }
-          const now = await ready().catch(() => null);
-          setAppReady(now);
-          getFolders()
-            .then(setFoldersData)
-            .catch(() => setFoldersData(null));
-        }
-      }, 1000);
+      startPolling();
     } catch (e: any) {
       alert(e?.message || "Failed to remove folder");
     }
   }
 
+  async function onRescanAll() {
+    if (running) return;
+    const roots = currentRoots(foldersData);
+    if (!roots.length) return setErrorMessage("No indexed folders to rescan.");
+
+    const r = await ready().catch(() => null);
+    prevIndexedRef.current = r?.indexed ?? 0;
+
+    const started = await startReindex(roots).catch((e) => {
+      setErrorMessage(e?.message || "Failed to start rescan");
+      return null;
+    });
+    if (!started) return;
+
+    setStatus(started);
+    startPolling();
+  }
+
   async function onResetIndex() {
-    if (status?.state === "running") {
+    if (running) {
       alert("Indexing is in progress. Please wait or cancel before resetting.");
       return;
     }
@@ -215,17 +191,38 @@ export default function IndexMode({
     <div className="bg-secondary-bg mb-2 p-4 rounded-md max-w-4xl mx-auto">
       <div className="flex justify-between">
         <h1 className="font-header text-2xl">Indexed Folders:</h1>
-        <button
-          type="button"
-          onClick={onResetIndex}
-          disabled={status?.state === "running"}
-          title="Removes the local index and thumbnails. Your images are untouched."
-          className="border-2 border-error px-3 pb-0.5 pt-1
-            cursor-pointer hover:bg-rose-200 bg-rose-50 font-body text-sm 
-            rounded-md h-fit text-error transition-all duration-200"
-        >
-          Reset Index
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onRescanAll}
+            disabled={running || !currentRoots(foldersData).length}
+            title={
+              !currentRoots(foldersData).length
+                ? "No indexed folders to rescan"
+                : "Re-scan all indexed folders for new/changed files"
+            }
+            className="border-2 border-emerald-600 px-3 pb-0.5 pt-1 bg-emerald-50
+              cursor-pointer hover:bg-primary-hover font-body text-sm 
+              rounded-md h-fit text-emerald-700 transition-all duration-200
+              disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-100
+              disabled:cursor-not-allowed disabled:hover:bg-gray-100"
+          >
+            Rescan Folders
+          </button>
+
+          <button
+            type="button"
+            onClick={onResetIndex}
+            disabled={running}
+            title="Removes the local index and thumbnails. Your images are untouched."
+            className="border-2 border-error px-3 pb-0.5 pt-1
+              cursor-pointer hover:bg-rose-200 bg-rose-50 font-body text-sm 
+              rounded-md h-fit text-error transition-all duration-200
+              disabled:bg-rose-100 disabled:text-rose-400 disabled:cursor-not-allowed"
+          >
+            Reset Index
+          </button>
+        </div>
       </div>
 
       {/* Status + totals */}
@@ -236,7 +233,7 @@ export default function IndexMode({
           foldersData={foldersData}
           onRemoveRoot={onRemoveRoot}
           onOpenFile={openPath}
-          running={status?.state === "running"}
+          running={running}
         />
       </div>
 
@@ -246,7 +243,7 @@ export default function IndexMode({
           onStartIndex();
         }}
         className="flex flex-col gap-2"
-        aria-busy={status?.state === "running" ? "true" : "false"}
+        aria-busy={running ? "true" : "false"}
       >
         <label htmlFor="rootPath" className="font-header text-lg block">
           Add Images:
@@ -258,7 +255,7 @@ export default function IndexMode({
           <button
             type="button"
             onClick={pickFolder}
-            disabled={status?.state === "running"}
+            disabled={running}
             className="border-2 border-primary cursor-pointer hover:bg-primary-hover
               font-body px-4 py-0.5 rounded-md disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-100
               disabled:cursor-not-allowed disabled:hover:bg-gray-100"
@@ -287,7 +284,7 @@ export default function IndexMode({
             type="button"
             onClick={() => {
               if (running) {
-                onCancelIndex();
+                if (canCancel) onCancelIndex();
               } else {
                 onStartIndex();
               }
@@ -297,7 +294,7 @@ export default function IndexMode({
               running
                 ? canCancel
                   ? "bg-rose-500 hover:bg-rose-600 text-white"
-                  : "bg-gray-400 text-white cursor-not-allowed"
+                  : "bg-gray-200 text-gray-500 cursor-not-allowed"
                 : "bg-primary hover:bg-primary-hover"
             }
             disabled:bg-gray-200 disabled:text-gray-500
@@ -306,11 +303,11 @@ export default function IndexMode({
               running
                 ? canCancel
                   ? "Cancel current indexing"
-                  : "Finalizing… cannot cancel"
+                  : "Working… cannot cancel"
                 : "Index Images in Selected Folder"
             }
           >
-            {running ? (canCancel ? "Cancel" : "Finalizing…") : "Index Images!"}
+            {running ? (canCancel ? "Cancel" : "Working…") : "Index Images!"}
           </button>
 
           <div className="font-body text-rose-500 text-sm">{errorMessage}</div>
@@ -322,7 +319,7 @@ export default function IndexMode({
         </button>
 
         <span className="sr-only" aria-live="polite">
-          {status?.state === "running"
+          {running
             ? "Indexing has started."
             : status?.state === "done"
             ? "Indexing complete."
@@ -340,12 +337,12 @@ export default function IndexMode({
       </div>
 
       {/* “These images have been indexed” message */}
-      {status?.state === "done" && appReady && (
+      {/* {status?.state === "done" && appReady && (
         <div style={{ fontSize: 12, marginTop: 6 }}>
           Newly indexed this run:{" "}
           <b>{Math.max(0, appReady.indexed - prevIndexedRef.current)}</b>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
