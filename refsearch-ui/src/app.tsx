@@ -13,28 +13,42 @@ export default function App() {
 
   const [appMode, setAppMode] = useState<AppMode>("search");
 
+  // on startup. poll until app is ready
   useEffect(() => {
-    // load at start and whenever indexing finishes
-    ready()
-      .then(setAppReady)
-      .catch(() => setAppReady(null));
-    getFolders()
-      .then(setFoldersData)
-      .catch(() => setFoldersData(null));
+    let mounted = true;
+    let attempts = 0;
+    const load = async () => {
+      attempts++;
+      try {
+        const [rdy, folders] = await Promise.all([ready(), getFolders()]);
+        if (!mounted) return;
+        setAppReady(rdy);
+        setFoldersData(folders);
+      } catch {
+        if (attempts < 10) setTimeout(load, 500); // simple backoff
+      }
+    };
+    load();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // grabbing logs from backend
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<string>("backend-log", (e) => {
-      // you can show this in a log pane; for now just console
-      // eslint-disable-next-line no-console
       console.log("[backend-log]", e.payload);
     }).then((off) => (unlisten = off));
+
     return () => {
-      try {
-        unlisten && unlisten();
-      } catch {}
+      if (unlisten) {
+        try {
+          unlisten();
+        } catch (e) {
+          console.log("Backend Log Error: ", e);
+        }
+      }
     };
   }, []);
 
@@ -103,7 +117,7 @@ export default function App() {
         className={appMode === "search" ? "block" : "hidden"}
         aria-hidden={appMode !== "search"}
       >
-        <SearchMode />
+        <SearchMode appReady={appReady} foldersData={foldersData} />
       </div>
     </div>
   );

@@ -54,8 +54,9 @@ def _is_file_up_to_date(con, path, mtime):
 
 
 def ensure_db(db_path: str) -> sqlite3.Connection:
-    con = sqlite3.connect(db_path, check_same_thread=False)
+    con = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
     # Pragmas for better durability/perf in a local app
+    con.execute("PRAGMA busy_timeout=5000;")  
     con.execute("PRAGMA journal_mode=WAL;")
     con.execute("PRAGMA synchronous=NORMAL;")
     con.execute("""CREATE TABLE IF NOT EXISTS images(
@@ -75,7 +76,11 @@ def ensure_db(db_path: str) -> sqlite3.Connection:
     con.execute("CREATE INDEX IF NOT EXISTS idx_images_top_folder ON images(top_folder);")
     con.execute("CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder);")
     con.execute("CREATE INDEX IF NOT EXISTS idx_images_orientation ON images(orientation);")
+
+    con.execute("CREATE INDEX IF NOT EXISTS idx_images_root_top ON images(root, top_folder);")
+
     con.commit()
+    con.execute("ANALYZE;")
     return con
 
 def upsert_meta(con: sqlite3.Connection, path: str, width: int, height: int, mtime: float, root: str):
@@ -131,70 +136,98 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
 
     _check_cancel()
 
-    # --- Remove DB rows for files no longer present ---
-    cur = con.cursor()
-    to_del = []
-    for (p,) in cur.execute("SELECT path FROM images"):
-        if p not in current_set:
-            to_del.append((p,))
-    if to_del:
-        logger.info("Pruning %d missing files from DB", len(to_del))
-        cur.executemany("DELETE FROM images WHERE path=?", to_del)
+    try:
+        # --- Remove DB rows for files no longer present ---
+        cur = con.cursor()
+        to_del = []
+        for (p,) in cur.execute("SELECT path FROM images"):
+            if p not in current_set:
+                to_del.append((p,))
+        if to_del:
+            logger.info("Pruning %d missing files from DB", len(to_del))
+            cur.executemany("DELETE FROM images WHERE path=?", to_del)
         con.commit()
 
-    batch_imgs, batch_ids = [], []
-    done = 0
-    errors = 0 
+        batch_imgs, batch_ids = [], []
+        done = 0
+        errors = 0
+        since_commit = 0
+        BATCH_COMMIT = 200
 
-    for root, p in paths:
+        for root, p in paths:
+            _check_cancel()
+
+            try:
+                mtime = os.path.getmtime(p)
+
+                # If unchanged, carry forward existing vector (if we have it)
+                if _is_file_up_to_date(con, p, mtime):
+                    if old_map is not None:
+                        old_vecs, old_index = old_map
+                        i = old_index.get(p)
+                        if i is not None:
+                            ids.append(p)
+                            # 1xD to match batch shapes for vstack
+                            vecs.append(np.array(old_vecs[i], dtype="float32", copy=True)[None, :])
+                    continue
+
+                # Changed or new: read, upsert meta, queue for embedding
+                with Image.open(p) as im_raw:
+                    _check_cancel()
+                    im = im_raw.convert("RGB")
+                    width, height = im.size
+                upsert_meta(con, p, width, height, mtime, root)
+
+                t = preprocess(im)
+                batch_imgs.append(t); batch_ids.append(p)
+
+                since_commit += 1
+
+                # reduce lock window: commit metadata periodically
+                if since_commit >= BATCH_COMMIT:
+                    con.commit()
+                    since_commit = 0
+
+                # before long compute (embedding), release writer lock
+                if len(batch_imgs) >= batch_size:
+                    _check_cancel()
+                    if since_commit:
+                        con.commit()
+                        since_commit = 0
+                    feats = embed_images(model, batch_imgs, device=device)  # [B,D], normalized
+                    vecs.append(feats); ids.extend(batch_ids)
+                    batch_imgs, batch_ids = [], []
+
+            except Exception:
+                errors += 1
+                logger.exception("Failed processing file: %s", p)
+            finally:
+                done += 1
+                if progress_cb and (done % 50 == 0 or done == total):
+                    progress_cb(done, total)
+
+        if batch_imgs:
+            _check_cancel()
+            if since_commit:
+                con.commit()
+                since_commit = 0
+            feats = embed_images(model, batch_imgs, device=device)
+            vecs.append(feats); ids.extend(batch_ids)
+        
         _check_cancel()
+        con.commit() # final commit
 
-        try:
-            mtime = os.path.getmtime(p)
-
-            # If unchanged, carry forward existing vector (if we have it)
-            if _is_file_up_to_date(con, p, mtime):
-                if old_map is not None:
-                    old_vecs, old_index = old_map
-                    i = old_index.get(p)
-                    if i is not None:
-                        ids.append(p)
-                        # 1xD to match batch shapes for vstack
-                        vecs.append(np.array(old_vecs[i], dtype="float32", copy=True)[None, :])
-                continue
-
-            # Changed or new: read, upsert meta, queue for embedding
-            with Image.open(p) as im_raw:
-                _check_cancel()
-                im = im_raw.convert("RGB")
-                width, height = im.size
-            upsert_meta(con, p, width, height, mtime, root)
-
-            t = preprocess(im)
-            batch_imgs.append(t); batch_ids.append(p)
-
-            if len(batch_imgs) >= batch_size:
-                _check_cancel()
-                feats = embed_images(model, batch_imgs, device=device)  # [B,D], normalized
-                vecs.append(feats); ids.extend(batch_ids)
-                batch_imgs, batch_ids = [], []
-
-        except Exception:
-            errors += 1
-            logger.exception("Failed processing file: %s", p)
-            pass
-        finally:
-            done += 1
-            if progress_cb and (done % 50 == 0 or done == total):
-                progress_cb(done, total)
-
-    if batch_imgs:
-        _check_cancel()
-        feats = embed_images(model, batch_imgs, device=device)
-        vecs.append(feats); ids.extend(batch_ids)
-    
-    _check_cancel()
-    con.commit(); con.close()
+    except CancelledError:
+        try: con.rollback()
+        except Exception: pass
+        raise
+    except Exception:
+        try: con.rollback()
+        except Exception: pass
+        raise
+    finally:
+        try: con.close()
+        except Exception: pass
 
     if not vecs:
         raise RuntimeError("No images embedded and no carry-forward vectors.")

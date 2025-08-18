@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   cancelReindex,
   getFolders,
@@ -18,19 +18,17 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FoldersDataType } from "../app";
 import { findCoveringRoot } from "../lib/is-already-indexed";
 
-type IndexModeProps = {
-  appReady: Ready | null;
-  setAppReady: React.Dispatch<React.SetStateAction<Ready | null>>;
-  foldersData: FoldersDataType | null;
-  setFoldersData: React.Dispatch<React.SetStateAction<FoldersDataType | null>>;
-};
-
 export default function IndexMode({
   appReady,
   setAppReady,
   foldersData,
   setFoldersData,
-}: IndexModeProps) {
+}: {
+  appReady: Ready | null;
+  setAppReady: React.Dispatch<React.SetStateAction<Ready | null>>;
+  foldersData: FoldersDataType | null;
+  setFoldersData: React.Dispatch<React.SetStateAction<FoldersDataType | null>>;
+}) {
   const [status, setStatus] = useState<ReindexStatus | null>(null);
   const prevIndexedRef = useRef<number>(0);
   const [rootsInput, setRootsInput] = useState(""); // text field for a folder path
@@ -42,6 +40,16 @@ export default function IndexMode({
   const running = status?.state === "running";
   const phase = status?.phase ?? "idle";
   const canCancel = running && phase !== "finalizing";
+
+  // clean up poll ref
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
 
   async function onStartIndex() {
     const clean = rootsInput.trim();
@@ -85,7 +93,10 @@ export default function IndexMode({
       const s = await reindexStatus().catch(() => null);
       if (!s) return;
       setStatus(s);
-      if (s.state === "done" || s.state === "error") {
+
+      const isTerminal =
+        s.state === "done" || s.state === "error" || s.state === "cancelled";
+      if (isTerminal) {
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
@@ -151,7 +162,9 @@ export default function IndexMode({
         const s = await reindexStatus().catch(() => null);
         if (!s) return;
         setStatus(s);
-        if (s.state === "done" || s.state === "error") {
+        const isTerminal =
+          s.state === "done" || s.state === "error" || s.state === "cancelled";
+        if (isTerminal) {
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -219,6 +232,7 @@ export default function IndexMode({
 
       <div className="mb-12">
         <FolderCount
+          appReady={appReady}
           foldersData={foldersData}
           onRemoveRoot={onRemoveRoot}
           onOpenFile={openPath}
@@ -246,7 +260,8 @@ export default function IndexMode({
             onClick={pickFolder}
             disabled={status?.state === "running"}
             className="border-2 border-primary cursor-pointer hover:bg-primary-hover
-              font-body px-4 py-0.5 rounded-md"
+              font-body px-4 py-0.5 rounded-md disabled:border-gray-300 disabled:text-gray-400 disabled:bg-gray-100
+              disabled:cursor-not-allowed disabled:hover:bg-gray-100"
             aria-label="Choose a folder to index"
           >
             Choose Folder
@@ -284,7 +299,9 @@ export default function IndexMode({
                   ? "bg-rose-500 hover:bg-rose-600 text-white"
                   : "bg-gray-400 text-white cursor-not-allowed"
                 : "bg-primary hover:bg-primary-hover"
-            }`}
+            }
+            disabled:bg-gray-200 disabled:text-gray-500
+              disabled:cursor-not-allowed disabled:hover:bg-gray-200`}
             title={
               running
                 ? canCancel

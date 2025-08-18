@@ -17,7 +17,8 @@ def _wipe_store():
     db_path = os.path.join(STORE_DIR, "meta.sqlite")
     try:
         if os.path.exists(db_path):
-            with sqlite3.connect(db_path, check_same_thread=False) as con:
+            with sqlite3.connect(db_path, check_same_thread=False, timeout=5.0) as con:
+                con.execute("PRAGMA busy_timeout=5000;")
                 con.execute("DELETE FROM images")
                 con.commit()
     except Exception:

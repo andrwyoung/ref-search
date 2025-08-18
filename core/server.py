@@ -11,6 +11,8 @@ import numpy as np
 import sqlite3
 import uvicorn
 import threading
+import time
+from PIL import Image, ImageOps
 
 # ---- CONFIG ----
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -89,8 +91,28 @@ def load_store():
         raise RuntimeError("Index/model dimension mismatch. Please reindex.")
 
     ids = np.load(ids_path, allow_pickle=True)
-    con = sqlite3.connect(db_path, check_same_thread=False)
+    con = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
+    con.execute("PRAGMA busy_timeout=5000;") # give a timeout
     return index, ids, con
+
+# force reset indexes
+def _reload_store_from_disk():
+    """Reload index/ids/DB from disk and hot-swap into STATE, or clear if missing."""
+    try:
+        idx, ids, con = load_store()
+    except Exception:
+        idx, ids, con = None, None, None
+
+    with STATE["swap_lock"]:
+        # close old con if we’re swapping to a new one
+        old_con = STATE.get("con")
+        STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
+        STATE["dim"] = 0 if idx is None else idx.d
+        try:
+            if old_con and old_con is not con:
+                old_con.close()
+        except Exception:
+            pass
 
 def get_meta(path):
     con = STATE.get("con")
@@ -102,13 +124,29 @@ def get_meta(path):
     return row # width,height,orientation,folder
 
 def ensure_thumb(path, size=512):
-    import hashlib
-    key = hashlib.md5(f"{path}|{size}".encode("utf-8")).hexdigest() + ".jpg"
+    import hashlib, os
+    ver = "v2"  # bump if you change the logic again
+    mtime = int(os.path.getmtime(path)) if os.path.exists(path) else 0
+    key = hashlib.md5(f"{path}|{size}|{ver}|{mtime}".encode("utf-8")).hexdigest() + ".jpg"
     out = os.path.join(THUMB_DIR, key)
     if not os.path.exists(out):
         try:
-            im = Image.open(path).convert("RGB")
-            im.thumbnail((size, size), Image.LANCZOS)  # better quality filter
+            im = Image.open(path)
+            # Honor EXIF orientation for JPEGs, etc.
+            im = ImageOps.exif_transpose(im)
+
+            # If transparent, composite over white so background isn't black
+            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                im = im.convert("RGBA")
+                bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+                im = Image.alpha_composite(bg, im).convert("RGB")
+            else:
+                im = im.convert("RGB")
+
+            # Resize thumbnail
+            im.thumbnail((size, size), Image.LANCZOS)  # or Resampling.LANCZOS
+
+            # Save as high-quality JPEG
             im.save(out, "JPEG", quality=95, optimize=True, progressive=True)
         except Exception:
             return None
@@ -207,8 +245,9 @@ def folders():
 
     children = {}
     for r, f, n in by_root_top:
-        children.setdefault(r or "", []).append({"name": f or "", "count": n})
-
+        name = (f or "") or "(root)"
+        children.setdefault(r or "", []).append({"name": name, "count": n})
+ 
     roots = [{"root": r or "", "count": n, "folders": children.get(r or "", [])}
              for r, n in by_root]
 
@@ -256,66 +295,94 @@ def open_path(body: dict):
 
 # Stub — wire your existing indexer later as a background task
 STATE["reindex"] = {
+    "state": "idle",          # idle|running|finalizing|cancelled|error|done
+    "phase": "idle",          # scanning|embedding|finalizing (only meaningful when running/finalizing)
     "running": False,
     "processed": 0,
     "total": 0,
     "error": None,
     "cancelled": False,
-    "job_id": None, 
-    "phase": "idle",    # idle|scanning|embedding|finalizing|done|cancelled|error
+    "job_id": None,
+    "cancellable": False,     # explicit, no guessing in the client
+    "started_at": None,       # unix seconds
+    "ended_at": None,         # unix seconds (when terminal)
 }
 
 def _reindex_worker(roots: list[str]):
     try:
-        # reset state
         job_id = uuid.uuid4().hex
         STATE["reindex"].update({
-            "running": True, "processed": 0, "total": 0, "error": None,
-            "cancelled": False, "job_id": job_id, "phase": "scanning",
+            "state": "running",
+            "phase": "scanning",
+            "running": True,
+            "processed": 0,
+            "total": 0,
+            "error": None,
+            "cancelled": False,
+            "job_id": job_id,
+            "cancellable": True,          # allow cancel during scanning/embedding
+            "started_at": time.time(),
+            "ended_at": None,
         })
-        STATE["cancel_event"].clear()  # <-- make sure a previous cancel doesn't auto-cancel this run
+        STATE["cancel_event"].clear()
 
         from core.commands.indexer import build_index_with_progress, CancelledError
 
         def on_progress(done, total):
-            # once progress starts, we are embedding
+            # first progress tick -> embedding phase
             if STATE["reindex"].get("phase") == "scanning":
                 STATE["reindex"]["phase"] = "embedding"
             STATE["reindex"].update({"processed": done, "total": total})
-                                    
-        # run indexer with cancel support
+
         build_index_with_progress(
             roots, STORE_DIR, STATE["model"], STATE["preprocess"],
             progress_cb=on_progress,
             device=STATE["device"],
-            stop_event=STATE["cancel_event"]   # <-- pass it in
+            stop_event=STATE["cancel_event"]
         )
 
-        STATE["reindex"]["phase"] = "finalizing"
+        # finalizing: lock out cancel
+        STATE["reindex"].update({"phase": "finalizing", "state": "finalizing", "cancellable": False})
 
-        # after success, hot-reload store (swap under lock; close old con after)
+        # hot-swap
         idx_new, ids_new, con_new = load_store()
         with STATE["swap_lock"]:
             idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
             STATE["index"], STATE["ids"], STATE["con"] = idx_new, ids_new, con_new
             STATE["dim"] = idx_new.d
         try:
-            if con_old:
-                con_old.close()
+            if con_old: con_old.close()
         except Exception:
             pass
-            
-        STATE["reindex"]["phase"] = "done"
-        
+
+        STATE["reindex"].update({
+            "phase": "done",
+            "state": "done",
+            "ended_at": time.time(),
+        })
+
     except CancelledError:
-        STATE["reindex"]["error"] = None
-        STATE["reindex"]["cancelled"] = True
-        STATE["reindex"]["phase"] = "cancelled"
+        STATE["reindex"].update({
+            "error": None,
+            "cancelled": True,
+            "phase": "cancelled",
+            "state": "cancelled",
+            "cancellable": False,
+            "ended_at": time.time(),
+        })
+        _reload_store_from_disk()
+
     except Exception as e:
-        STATE["reindex"]["error"] = str(e)
-        STATE["reindex"]["phase"] = "error"
+        STATE["reindex"].update({
+            "error": str(e),
+            "phase": "error",
+            "state": "error",
+            "cancellable": False,
+            "ended_at": time.time(),
+        })
+        _reload_store_from_disk()
+
     finally:
-        
         STATE["reindex"]["running"] = False
 
 @app.post("/reindex")
@@ -369,17 +436,11 @@ def reindex(body: dict):
 @app.get("/reindex_status")
 def reindex_status():
     r = STATE["reindex"]
-    if r.get("running"):
-        state = "running"
-    elif r.get("error"):
-        state = "error"
-    elif r.get("cancelled"):
-        state = "cancelled"
-    elif r.get("total", 0) > 0:
-        state = "done"
-    else:
-        state = "idle"
-    return {"state": state, **r}
+    total = int(r.get("total") or 0)
+    done = int(r.get("processed") or 0)
+    progress_pct = int(done * 100 / max(total, 1))
+    # thin reflector; don't recompute state here
+    return {**r, "progress_pct": progress_pct}
 
 class CancelBody(BaseModel):
     job_id: str
@@ -389,11 +450,10 @@ def cancel_index(body: CancelBody):
     r = STATE["reindex"]
     if not r.get("running"):
         raise HTTPException(409, "No indexing job is running.")
+    if not r.get("cancellable"):
+        raise HTTPException(409, "This job cannot be cancelled right now.")
     if r.get("job_id") != body.job_id:
         raise HTTPException(409, "Job already changed or completed.")
-    # Do not allow cancel once we are finalizing
-    if r.get("phase") == "finalizing":
-        raise HTTPException(409, "Job is finalizing and can no longer be cancelled.")
     STATE["cancel_event"].set()
     return {"status": "cancel requested", "job_id": r.get("job_id")}
 
@@ -446,7 +506,8 @@ def remove_roots(body: RemoveRootsBody):
         db_path = os.path.join(STORE_DIR, "meta.sqlite")
         try:
             if os.path.exists(db_path):
-                with sqlite3.connect(db_path, check_same_thread=False) as con:
+                with sqlite3.connect(db_path, check_same_thread=False, timeout=5.0) as con:
+                    con.execute("PRAGMA busy_timeout=5000;")
                     con.execute("DELETE FROM images")
                     con.commit()
         except Exception:
@@ -474,13 +535,27 @@ def remove_roots(body: RemoveRootsBody):
     # Rebuild the index with survivors ONLY (no merge!)
     def worker():
         try:
-            # reset job state and clear any prior cancel signal
-            STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None, "cancelled": False})
+            job_id = uuid.uuid4().hex
+            STATE["reindex"].update({
+                "state": "running",
+                "phase": "scanning",
+                "running": True,
+                "processed": 0,
+                "total": 0,
+                "error": None,
+                "cancelled": False,
+                "job_id": job_id,
+                "cancellable": False,        # ← explicit: FE won’t offer cancel
+                "started_at": time.time(),
+                "ended_at": None,
+            })
             STATE["cancel_event"].clear()
 
             from core.commands.indexer import build_index_with_progress, CancelledError
 
             def on_progress(done, total):
+                if STATE["reindex"].get("phase") == "scanning":
+                    STATE["reindex"]["phase"] = "embedding"
                 STATE["reindex"].update({"processed": done, "total": total})
 
             build_index_with_progress(
@@ -493,23 +568,34 @@ def remove_roots(body: RemoveRootsBody):
                 stop_event=STATE["cancel_event"],
             )
 
-            # reload in-memory store
+            STATE["reindex"].update({"phase": "finalizing", "state": "finalizing"})
+
             idx, ids, con = load_store()
             with STATE["swap_lock"]:
                 idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
                 STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
                 STATE["dim"] = idx.d
             try:
-                if con_old:
-                    con_old.close()
+                if con_old: con_old.close()
             except Exception:
                 pass
 
+            STATE["reindex"].update({"phase": "done", "state": "done", "ended_at": time.time()})
+
         except CancelledError:
-            STATE["reindex"]["error"] = None
-            STATE["reindex"]["cancelled"] = True
+            STATE["reindex"].update({
+                "error": None, "cancelled": True, "phase": "cancelled",
+                "state": "cancelled", "ended_at": time.time()
+            })
+            _reload_store_from_disk()   # ← ensure STATE mirrors disk after cancel
+
         except Exception as e:
-            STATE["reindex"]["error"] = str(e)
+            STATE["reindex"].update({
+                "error": str(e), "phase": "error", "state": "error",
+                "ended_at": time.time()
+            })
+            _reload_store_from_disk()   # ← ensure STATE mirrors disk after error
+
         finally:
             STATE["reindex"]["running"] = False
 

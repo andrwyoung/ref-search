@@ -1,4 +1,4 @@
-import type { ReindexStatus } from "../api";
+import type { ReindexStatus } from "../../api";
 
 export function Progress({ status }: { status: ReindexStatus }) {
   const percentDone =
