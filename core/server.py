@@ -1,6 +1,7 @@
 # server.py
 import os, io, json, platform, subprocess
 from typing import Optional
+import uuid
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -254,19 +255,34 @@ def open_path(body: dict):
     return {"ok": True}
 
 # Stub — wire your existing indexer later as a background task
-STATE["reindex"] = {"running": False, "processed": 0, "total": 0, "error": None, "cancelled": False}
+STATE["reindex"] = {
+    "running": False,
+    "processed": 0,
+    "total": 0,
+    "error": None,
+    "cancelled": False,
+    "job_id": None, 
+    "phase": "idle",    # idle|scanning|embedding|finalizing|done|cancelled|error
+}
 
 def _reindex_worker(roots: list[str]):
     try:
         # reset state
-        STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None, "cancelled": False})
+        job_id = uuid.uuid4().hex
+        STATE["reindex"].update({
+            "running": True, "processed": 0, "total": 0, "error": None,
+            "cancelled": False, "job_id": job_id, "phase": "scanning",
+        })
         STATE["cancel_event"].clear()  # <-- make sure a previous cancel doesn't auto-cancel this run
 
         from core.commands.indexer import build_index_with_progress, CancelledError
 
         def on_progress(done, total):
+            # once progress starts, we are embedding
+            if STATE["reindex"].get("phase") == "scanning":
+                STATE["reindex"]["phase"] = "embedding"
             STATE["reindex"].update({"processed": done, "total": total})
-
+                                    
         # run indexer with cancel support
         build_index_with_progress(
             roots, STORE_DIR, STATE["model"], STATE["preprocess"],
@@ -274,6 +290,8 @@ def _reindex_worker(roots: list[str]):
             device=STATE["device"],
             stop_event=STATE["cancel_event"]   # <-- pass it in
         )
+
+        STATE["reindex"]["phase"] = "finalizing"
 
         # after success, hot-reload store (swap under lock; close old con after)
         idx_new, ids_new, con_new = load_store()
@@ -286,14 +304,18 @@ def _reindex_worker(roots: list[str]):
                 con_old.close()
         except Exception:
             pass
-
+            
+        STATE["reindex"]["phase"] = "done"
+        
     except CancelledError:
-        # optional: mark for UI if you want to surface "cancelled" later
-        STATE["reindex"]["error"] = None  # ensure not marked as error
+        STATE["reindex"]["error"] = None
         STATE["reindex"]["cancelled"] = True
+        STATE["reindex"]["phase"] = "cancelled"
     except Exception as e:
         STATE["reindex"]["error"] = str(e)
+        STATE["reindex"]["phase"] = "error"
     finally:
+        
         STATE["reindex"]["running"] = False
 
 @app.post("/reindex")
@@ -359,10 +381,21 @@ def reindex_status():
         state = "idle"
     return {"state": state, **r}
 
+class CancelBody(BaseModel):
+    job_id: str
+
 @app.post("/cancel_index")
-def cancel_index():
+def cancel_index(body: CancelBody):
+    r = STATE["reindex"]
+    if not r.get("running"):
+        raise HTTPException(409, "No indexing job is running.")
+    if r.get("job_id") != body.job_id:
+        raise HTTPException(409, "Job already changed or completed.")
+    # Do not allow cancel once we are finalizing
+    if r.get("phase") == "finalizing":
+        raise HTTPException(409, "Job is finalizing and can no longer be cancelled.")
     STATE["cancel_event"].set()
-    return {"status": "cancel requested"}
+    return {"status": "cancel requested", "job_id": r.get("job_id")}
 
 # get all the current roots
 def _current_roots() -> list[str]:
@@ -441,22 +474,40 @@ def remove_roots(body: RemoveRootsBody):
     # Rebuild the index with survivors ONLY (no merge!)
     def worker():
         try:
-            STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None})
-            from core.commands.indexer import build_index_with_progress
+            # reset job state and clear any prior cancel signal
+            STATE["reindex"].update({"running": True, "processed": 0, "total": 0, "error": None, "cancelled": False})
+            STATE["cancel_event"].clear()
+
+            from core.commands.indexer import build_index_with_progress, CancelledError
+
             def on_progress(done, total):
                 STATE["reindex"].update({"processed": done, "total": total})
-            build_index_with_progress(survivors, STORE_DIR, STATE["model"], STATE["preprocess"], on_progress, device=STATE["device"])
+
+            build_index_with_progress(
+                roots=survivors,
+                store_dir=STORE_DIR,
+                model=STATE["model"],
+                preprocess=STATE["preprocess"],
+                progress_cb=on_progress,
+                device=STATE["device"],
+                stop_event=STATE["cancel_event"],
+            )
+
             # reload in-memory store
             idx, ids, con = load_store()
             with STATE["swap_lock"]:
-               idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
-               STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
-               STATE["dim"] = idx.d
+                idx_old, ids_old, con_old = STATE["index"], STATE["ids"], STATE["con"]
+                STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
+                STATE["dim"] = idx.d
             try:
                 if con_old:
                     con_old.close()
             except Exception:
                 pass
+
+        except CancelledError:
+            STATE["reindex"]["error"] = None
+            STATE["reindex"]["cancelled"] = True
         except Exception as e:
             STATE["reindex"]["error"] = str(e)
         finally:

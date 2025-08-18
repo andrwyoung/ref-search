@@ -39,6 +39,10 @@ export default function IndexMode({
 
   const pollRef = useRef<number | null>(null); // prevent multiple reindexes from happening
 
+  const running = status?.state === "running";
+  const phase = status?.phase ?? "idle";
+  const canCancel = running && phase !== "finalizing";
+
   async function onStartIndex() {
     const clean = rootsInput.trim();
     if (!clean || clean === "") {
@@ -66,7 +70,11 @@ export default function IndexMode({
     const r = await ready().catch(() => null);
     prevIndexedRef.current = r?.indexed ?? 0;
 
-    const started = await startReindex([clean]);
+    const started = await startReindex([clean]).catch((e) => {
+      setErrorMessage(e?.message || "Failed to start indexing");
+      return null;
+    });
+    if (!started) return;
     setStatus(started);
 
     if (pollRef.current) {
@@ -92,8 +100,13 @@ export default function IndexMode({
   }
 
   async function onCancelIndex() {
+    if (!status?.job_id) {
+      console.warn("No job_id to cancel");
+      return;
+    }
+    if (!canCancel) return;
     try {
-      await cancelReindex();
+      await cancelReindex(status.job_id);
     } catch (e) {
       console.error("Cancel failed", e);
     }
@@ -258,25 +271,29 @@ export default function IndexMode({
           <button
             type="button"
             onClick={() => {
-              if (status?.state === "running") {
+              if (running) {
                 onCancelIndex();
               } else {
                 onStartIndex();
               }
             }}
-            aria-disabled={false}
+            disabled={running && !canCancel}
             className={`w-40 font-body px-4 py-1 rounded-md cursor-pointer ${
-              status?.state === "running"
-                ? "bg-rose-500 hover:bg-rose-600 text-white"
+              running
+                ? canCancel
+                  ? "bg-rose-500 hover:bg-rose-600 text-white"
+                  : "bg-gray-400 text-white cursor-not-allowed"
                 : "bg-primary hover:bg-primary-hover"
             }`}
             title={
-              status?.state === "running"
-                ? "Cancel current indexing"
+              running
+                ? canCancel
+                  ? "Cancel current indexing"
+                  : "Finalizing… cannot cancel"
                 : "Index Images in Selected Folder"
             }
           >
-            {status?.state === "running" ? "Cancel" : "Index Images!"}
+            {running ? (canCancel ? "Cancel" : "Finalizing…") : "Index Images!"}
           </button>
 
           <div className="font-body text-rose-500 text-sm">{errorMessage}</div>

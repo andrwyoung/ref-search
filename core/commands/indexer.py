@@ -2,9 +2,30 @@ import os, sqlite3, time, numpy as np
 from PIL import Image
 import faiss
 import json, time
+import logging
+from logging.handlers import RotatingFileHandler
 
 class CancelledError(Exception):
     pass
+
+logger = logging.getLogger("refsearch.indexer")
+logger.setLevel(logging.INFO)
+
+def _ensure_log_handler(store_dir: str):
+    """Attach a rotating file handler under <store_dir>/logs exactly once."""
+    if any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+        return
+    os.makedirs(os.path.join(store_dir, "logs"), exist_ok=True)
+    fh = RotatingFileHandler(
+        os.path.join(store_dir, "logs", "indexer.log"),
+        maxBytes=5 * 1024 * 1024,  # 5 MB
+        backupCount=3
+    )
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    ))
+    logger.addHandler(fh)
 
 def _atomic_write(path, write_fn):
     tmp = f"{path}.tmp"
@@ -77,6 +98,9 @@ def upsert_meta(con: sqlite3.Connection, path: str, width: int, height: int, mti
     """, (path, root, rel, top, top, mtime, width, height, ori))
 
 def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=None, batch_size=64, device="cpu", stop_event=None,):
+    _ensure_log_handler(store_dir)
+    logger.info("Index start: roots=%s batch_size=%d device=%s", roots, batch_size, device)
+    
     os.makedirs(store_dir, exist_ok=True)
     db = os.path.join(store_dir, "meta.sqlite")
     con = ensure_db(db)
@@ -92,6 +116,8 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
     old_ids_path  = os.path.join(store_dir, "ids.npy")
     old_vecs_path = os.path.join(store_dir, "vectors.npy")
     old_map = None
+    if not os.path.exists(old_ids_path) or not os.path.exists(old_vecs_path):
+        logger.info("No carry-forward vectors found (cold build)")
     if os.path.exists(old_ids_path) and os.path.exists(old_vecs_path):
         old_ids  = np.load(old_ids_path, allow_pickle=True)
         old_vecs = np.load(old_vecs_path, mmap_mode="r")  # [N,D]
@@ -112,11 +138,13 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
         if p not in current_set:
             to_del.append((p,))
     if to_del:
+        logger.info("Pruning %d missing files from DB", len(to_del))
         cur.executemany("DELETE FROM images WHERE path=?", to_del)
         con.commit()
 
     batch_imgs, batch_ids = [], []
     done = 0
+    errors = 0 
 
     for root, p in paths:
         _check_cancel()
@@ -152,7 +180,8 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
                 batch_imgs, batch_ids = [], []
 
         except Exception:
-            # optionally log the error with the path
+            errors += 1
+            logger.exception("Failed processing file: %s", p)
             pass
         finally:
             done += 1
@@ -172,6 +201,15 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
 
     # Stack all chunks (both carry-forward rows and embedded batches)
     X = np.vstack(vecs).astype("float32")
+
+
+    logger.info(
+        "Index done: total=%d embedded=%d reused=%d errors=%d",
+        total,
+        sum(getattr(a, "shape", (0,))[0] if hasattr(a, "shape") else len(a) for a in vecs),
+        len(ids) - (sum(getattr(a, "shape", (0,))[0] if hasattr(a, "shape") else len(a) for a in vecs)),
+        errors
+    )   
 
     # Write index + arrays atomically
     index = faiss.IndexFlatIP(X.shape[1])

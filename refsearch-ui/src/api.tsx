@@ -18,11 +18,22 @@ export type Ready = {
   mode: "faiss" | "numpy" | null;
 };
 
+export type ReindexPhase =
+  | "idle"
+  | "scanning"
+  | "embedding"
+  | "finalizing"
+  | "done"
+  | "cancelled"
+  | "error";
+
 export type ReindexStatus = {
-  state: "running" | "done" | "error" | "idle";
+  state: "running" | "done" | "error" | "idle" | "cancelled";
   processed: number;
   total: number;
   error?: string | null;
+  job_id?: string | null;
+  phase?: ReindexPhase;
 };
 
 export type FolderBucket = { name: string; count: number };
@@ -43,17 +54,32 @@ export async function startReindex(roots: string[]): Promise<ReindexStatus> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ roots }),
   });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `reindex failed (${r.status})`);
+  }
   return r.json();
 }
 
 export async function reindexStatus(): Promise<ReindexStatus> {
   const r = await fetch(`${BASE}/reindex_status`);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `reindex_status failed (${r.status})`);
+  }
   return r.json();
 }
 
-export async function cancelReindex() {
-  const r = await fetch(`${BASE}/cancel_index`, { method: "POST" });
-  if (!r.ok) throw new Error("Cancel failed");
+export async function cancelReindex(jobId: string) {
+  const r = await fetch(`${BASE}/cancel_index`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }), // ← send the current job id
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.detail || `Cancel failed (${r.status})`);
+  }
   return r.json();
 }
 
