@@ -17,7 +17,7 @@ def load_model(device="cpu", name="ViT-B-32", ckpt="laion2b_s34b_b79k"):
         if not os.path.exists(pretrained):
             raise RuntimeError(f"Local model weights not found in {model_dir}")
         model, _, preprocess = open_clip.create_model_and_transforms(
-            name=name, pretrained=pretrained, device=device
+            name, pretrained, device=device
         )
     else:
         # use local cache only; optionally pin cache_dir so it’s inside your app data
@@ -25,7 +25,7 @@ def load_model(device="cpu", name="ViT-B-32", ckpt="laion2b_s34b_b79k"):
         if cache_dir:
             kwargs["cache_dir"] = cache_dir
         model, _, preprocess = open_clip.create_model_and_transforms(
-            name=name, pretrained=ckpt, **kwargs
+            name, pretrained=ckpt, **kwargs
         )
 
     tokenizer = open_clip.get_tokenizer(name)

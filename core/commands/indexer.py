@@ -1,6 +1,6 @@
 import os, sqlite3, time, numpy as np
 from PIL import Image
-import faiss
+# import faiss
 import json, time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -245,15 +245,15 @@ def build_index_with_progress(roots, store_dir, model, preprocess, progress_cb=N
     )   
 
     # Write index + arrays atomically
-    index = faiss.IndexFlatIP(X.shape[1])
-    index.add(X)
+    # index = faiss.IndexFlatIP(X.shape[1])
+    # index.add(X)
 
-    ids_path   = os.path.join(store_dir, "ids.npy")
-    index_path = os.path.join(store_dir, "index.faiss")
+    # index_path = os.path.join(store_dir, "index.faiss")
     vecs_path  = os.path.join(store_dir, "vectors.npy")
+    ids_path   = os.path.join(store_dir, "ids.npy")
 
     _atomic_save_npy(ids_path, np.array(ids, dtype=object), allow_pickle=True)
-    _atomic_write(index_path, lambda p: faiss.write_index(index, p))
+    # _atomic_write(index_path, lambda p: faiss.write_index(index, p))
     _atomic_save_npy(vecs_path, X)
 
     # Save config with merged roots

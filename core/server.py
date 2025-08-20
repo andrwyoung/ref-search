@@ -1,5 +1,7 @@
 # server.py
 import os, io, json, platform, subprocess
+
+from core.numpy_index import NumpyIndex
 os.environ.setdefault("OMP_NUM_THREADS", "4")
 os.environ.setdefault("MKL_NUM_THREADS", "4")
 from typing import Optional
@@ -31,7 +33,7 @@ os.makedirs(STORE_DIR, exist_ok=True)
 from core.commands.nuke import _wipe_store
 from core.helpers.helpers import _detect_overlaps, _norm_path
 from core.models import load_model, embed_texts, embed_images  # you already have these
-import faiss
+# import faiss
 
 class SearchFilters(BaseModel):
     folder: Optional[str] = None
@@ -78,19 +80,26 @@ def try_load_store():
         return None, None, None  # if no index yet
 
 def load_store():
-    idx_path = os.path.join(STORE_DIR, "index.faiss")
+    vecs_path = os.path.join(STORE_DIR, "vectors.npy")
+    # idx_path = os.path.join(STORE_DIR, "index.faiss")
     ids_path = os.path.join(STORE_DIR, "ids.npy")
     db_path  = os.path.join(STORE_DIR, "meta.sqlite")
     cfg_path = os.path.join(STORE_DIR, "config.json")
 
-    for p in (cfg_path, idx_path, ids_path, db_path):
+    for p in (cfg_path, vecs_path, ids_path, db_path):
+    # for p in (cfg_path, idx_path, ids_path, db_path):
         if not os.path.exists(p):
             raise RuntimeError(f"{os.path.basename(p)} missing. Rebuild index.")
 
     cfg = json.load(open(cfg_path))
-    index = faiss.read_index(idx_path)
-    if cfg.get("dim") != index.d:
+    # index = faiss.read_index(idx_path)
+    # if cfg.get("dim") != index.d:
+    #     raise RuntimeError("Index/model dimension mismatch. Please reindex.")
+    # memory-map to keep RSS low
+    X = np.load(vecs_path, mmap_mode="r")
+    if cfg.get("dim") != int(X.shape[1]):
         raise RuntimeError("Index/model dimension mismatch. Please reindex.")
+    index = NumpyIndex(X)
 
     ids = np.load(ids_path, allow_pickle=True)
     con = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)

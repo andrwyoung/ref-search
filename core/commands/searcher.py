@@ -1,10 +1,27 @@
-import os, sqlite3, numpy as np, faiss
+import os, sqlite3, numpy as np
+# import faiss
 from PIL import Image
 
+from core.numpy_index import NumpyIndex
+
+# def load_store(store_dir):
+#     index = faiss.read_index(os.path.join(store_dir, "index.faiss"))
+#     ids = np.load(os.path.join(store_dir, "ids.npy"), allow_pickle=True)
+#     con = sqlite3.connect(os.path.join(store_dir, "meta.sqlite"))
+#     return index, ids, con
+
 def load_store(store_dir):
-    index = faiss.read_index(os.path.join(store_dir, "index.faiss"))
-    ids = np.load(os.path.join(store_dir, "ids.npy"), allow_pickle=True)
-    con = sqlite3.connect(os.path.join(store_dir, "meta.sqlite"))
+    vecs_path = os.path.join(store_dir, "vectors.npy")
+    ids_path = os.path.join(store_dir, "ids.npy")
+    db_path  = os.path.join(store_dir, "meta.sqlite")
+
+    if not (os.path.exists(vecs_path) and os.path.exists(ids_path) and os.path.exists(db_path)):
+        raise RuntimeError("Store files missing. Rebuild index.")
+
+    X = np.load(vecs_path, mmap_mode="r")
+    index = NumpyIndex(X)
+    ids = np.load(ids_path, allow_pickle=True)
+    con = sqlite3.connect(db_path)
     return index, ids, con
 
 def post_filter(rows, con, folder=None, orientation=None):
