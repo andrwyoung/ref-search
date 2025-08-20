@@ -1,5 +1,7 @@
 # server.py
 import os, io, json, platform, subprocess
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("MKL_NUM_THREADS", "4")
 from typing import Optional
 import uuid
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -156,6 +158,19 @@ def ensure_thumb(path, size=512):
 def startup():
     STATE["device"] = pick_device()
     STATE["model"], STATE["preprocess"], STATE["tokenizer"] = load_model(device=STATE["device"])
+
+    try:
+        import torch
+        from PIL import Image
+        import numpy as np
+        # tiny 1×1 RGB to tickle encode_image path
+        dummy = Image.new("RGB", (1, 1))
+        q = STATE["preprocess"](dummy)
+        with torch.no_grad():
+            _ = STATE["model"].encode_image(torch.stack([q]).to(STATE["device"]))
+    except Exception:
+        pass
+
     idx, ids, con = try_load_store()
     STATE["index"], STATE["ids"], STATE["con"] = idx, ids, con
     STATE["dim"] = 0 if idx is None else idx.d
