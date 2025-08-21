@@ -10,8 +10,6 @@ make dev
 
 Supporting Document: [RefSearch Notes on Notion](https://jondrew.notion.site/Refsearch-2562e809fa4e8053a598f13d51dbbef8?source=copy_link)
 
-⸻
-
 ## Things to Know
 
 We use a Tauri-based frontend (Rust + React) that runs a Python backend (FastAPI + Pytorch). All image data is stored at STORE_DIR
