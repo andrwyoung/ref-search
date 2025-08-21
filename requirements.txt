@@ -1,0 +1,19 @@
+# Core API
+fastapi
+uvicorn
+
+# Image/array stack
+numpy<2          # critical: keep <2 for current PyTorch wheels
+pillow
+python-multipart
+
+# CLIP + helpers
+torch            # let pip pick the right wheel per OS/arch
+open_clip_torch==3.1.0
+pydantic
+timm
+ftfy
+regex
+safetensors
+tqdm
+requests

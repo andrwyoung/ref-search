@@ -8,6 +8,14 @@ pnpm-debug.log*
 lerna-debug.log*
 
 *.venv/
+*.venv/
+*.venv-x86/
+*.venv-aarch/
+
+store
+
+build
+build-v*
 
 node_modules
 dist
@@ -28,3 +36,6 @@ dist-ssr
 __pycache__/
 *.py[cod]
 *.pyo
+
+src-tauri/resources
+*.spec

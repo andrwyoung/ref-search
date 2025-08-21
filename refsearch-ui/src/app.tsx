@@ -17,6 +17,7 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     let attempts = 0;
+
     const load = async () => {
       attempts++;
       try {
@@ -25,9 +26,14 @@ export default function App() {
         setAppReady(rdy);
         setFoldersData(folders);
       } catch {
-        if (attempts < 10) setTimeout(load, 500); // simple backoff
+        if (attempts < 20) {
+          // exponential backoff: 500ms, 1s, 2s, 4s... capped at 30s
+          const delay = Math.min(500 * 2 ** (attempts - 1), 30000);
+          setTimeout(load, delay);
+        }
       }
     };
+
     load();
     return () => {
       mounted = false;

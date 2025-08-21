@@ -657,7 +657,13 @@ def nuke_all(body: NukeAllBody):
 
 
 
+# if __name__ == "__main__":
+#     host = "127.0.0.1"
+#     port = PORT  # already from env; keep it
+#     uvicorn.run("core.server:app", host=host, port=port)  # no reload in prodo
+
 if __name__ == "__main__":
-    host = "127.0.0.1"
-    port = PORT  # already from env; keep it
-    uvicorn.run("core.server:app", host=host, port=port)  # no reload in prod
+    host = os.environ.get("REFSEARCH_HOST", "127.0.0.1")
+    port = int(os.environ.get("REFSEARCH_PORT", str(PORT)))
+    # run directly on the imported app (no reload, lower log noise)
+    uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)

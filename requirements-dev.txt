@@ -1,0 +1,3 @@
+-r requirements.txt
+pyinstaller
+typer # optional: only used if you want to use the refsearch.py cli

@@ -2,12 +2,12 @@
   "$schema": "../../../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "RefSearch",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.andrwyoung.refsearch",
   "build": {
-    "frontendDist": "./refsearch-ui/dist",
+    "frontendDist": "../refsearch-ui/dist",
     "devUrl": "http://localhost:54998",
-    "beforeDevCommand": "npm run dev --prefix ./refsearch-ui",
-    "beforeBuildCommand": "npm run build --prefix ./refsearch-ui"
+    "beforeDevCommand": "npm run dev --prefix ../refsearch-ui",
+    "beforeBuildCommand": "npm run build --prefix ../refsearch-ui"
   },
   "app": {
     "windows": [
@@ -24,6 +24,7 @@
     }
   },
   "bundle": {
+    "resources": ["resources/backend/refsearch-backend"],
     "active": true,
     "targets": "all",
     "icon": [
