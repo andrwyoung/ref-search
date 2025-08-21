@@ -1,20 +1,36 @@
-refsearch/
-├── refsearch.py # CLI entry
-├── indexer.py # walks folders, embeds, builds FAISS
-├── searcher.py # loads index, runs text/image queries
-├── models.py # model/transform loaders
-└── store/
-──├── index.faiss # FAISS index
-── ├── ids.npy # FAISS id -> row mapping
-── ├── meta.sqlite # paths, sizes, mtime, folder, orientation, optional color
-── └── config.json # model name, transform params, index type
+## RefSearch
+
+Search images on your computer by describing what they look like.
+
+**Quickstart:**
 
 ```
-# running python server on one terminal
-conda activate refsearch311
-python -m uvicorn core.server:app --port 54999 --reload
-
-
-# in refsearch-ui/ on another terminal
-npm run dev
+make dev
 ```
+
+Supporting Document: [RefSearch Notes on Notion](https://jondrew.notion.site/Refsearch-2562e809fa4e8053a598f13d51dbbef8?source=copy_link)
+
+⸻
+
+## Things to Know
+
+We use a Tauri-based frontend (Rust + React) that runs a Python backend (FastAPI + Pytorch). All image data is stored at STORE_DIR
+
+Ports are currently hard coded:
+
+- Frontend: 54998
+- Backend: 54999
+
+### Requirements
+
+- **Python 3.10+** (recommended to use a virtualenv)
+- **Node.js 18+** and `npm`
+- **Rust & Cargo** (installed via [rustup](https://rustup.rs))
+- macOS or Linux (Windows builds possible but not covered here)
+
+### Folder Overview
+
+- **core/** → Processes images and searches them (Python Backend)
+- **refsearch-ui/** → What the app looks like (React Frontend)
+- **src-tauri/** → Puts everything together (Tauri Rust Layer: runs frontend in browser window. Spins up backend as a sidecar)
+- **scripts/** → Helper script to start up the backend
